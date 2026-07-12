@@ -40,7 +40,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          NAME="文件自动分类工具-${RELEASE_TAG:-${GITHUB_REF_NAME:-dev}}"
+          # GitHub Release 附件名会剥掉中文字符,故 exe 用英文名,下载后可自行重命名
+          NAME="FileAutoClassifier-${RELEASE_TAG:-${GITHUB_REF_NAME:-dev}}"
           pyinstaller --onefile --windowed --name "$NAME" \
             --icon app.ico --add-data "app.ico;." --add-binary "UnRAR.exe;." \
             --collect-submodules py7zr --collect-submodules rarfile \
@@ -68,7 +69,7 @@ jobs:
           generate_release_notes: true
           body: |
             Windows 免安装单文件版:下载下方 exe,拷到任意 Windows 电脑双击即用,
-            无需安装 Python 或 WinRAR。
+            无需安装 Python 或 WinRAR。下载后可重命名为「文件自动分类工具.exe」。
 
             - 双击运行 = 图形界面;命令行带参数运行 = 无界面批处理(`-h` 查看用法)
             - 详细功能与用法见仓库中的《使用说明.md》
