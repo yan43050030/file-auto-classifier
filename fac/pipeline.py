@@ -15,8 +15,15 @@ from .util import unique_path, safe_folder_name, long_path, delete_to_trash, sha
 from .password import PasswordManager, load_password_candidates
 from .idcard import find_ids
 from .rules import Rule, match_rules
+from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
 from . import extract as ex
 from .report import write_matrix_report
+
+_RULE_CN = {
+    'ext': '扩展名', 'size_gt': '文件大于', 'size_lt': '文件小于',
+    'date_before': '修改时间早于', 'date_after': '修改时间晚于',
+    'contains': '包含文字', 'regex': '正则匹配',
+}
 
 
 class Cancelled(Exception):
@@ -32,7 +39,7 @@ class JobOptions:
                  preview=False,
                  content_match=False, split_excel=False, dedup=False,
                  auto_pw_txt=True, pw_files=None, delete_ok=False,
-                 rules=None):
+                 rules=None, intelligent=True):
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.roster = roster
@@ -47,6 +54,7 @@ class JobOptions:
         self.pw_files = list(pw_files or [])
         self.delete_ok = delete_ok
         self.rules = list(rules or [])    # 高级分类规则列表
+        self.intelligent = intelligent
 
 
 class PlanItem:
@@ -273,6 +281,22 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         if rules:
             tee(f'已启用 {len(rules)} 条高级分类规则。')
 
+        # ---- 3.5 智能识别 ----
+        imatch = None
+        if opts.intelligent:
+            detected = detect_names(all_files, min_freq=10, log=tee)
+            # 已知姓名 = 名单中的姓名/曾用名 + 智能发现的高频候选姓名
+            known_names = set()
+            for p in opts.roster.persons:
+                known_names.add(p.name)
+                for a in p.aliases:
+                    known_names.add(a)
+            for d in detected:
+                known_names.add(d['name'])
+            n2i, i2n = build_name_id_map(all_files, known_names, log=tee)
+            detected_only = {d['name'] for d in detected}
+            imatch = IntelligentMatcher(opts.roster, n2i, i2n, detected_only)
+
         plan = []
         for i, (fp, fname, unit) in enumerate(all_files, 1):
             ck()
@@ -297,12 +321,20 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                                      [p.folder for p in persons],
                                      persons, via))
                 continue
-            # 高级分类规则(名单未命中 → 按文件类型/大小/时间/自定义字符/正则)
+            # 智能识别:name↔ID 映射
+            if imatch is not None:
+                m = imatch.match(fname)
+                if m:
+                    folder, sm_via = m
+                    plan.append(PlanItem(fp, fname, unit, 'place',
+                                         [folder], via=sm_via))
+                    continue
+            # 高级分类规则(名单/智能识别未命中 → 按文件类型/大小/时间/自定义字符/正则)
             if rules:
                 r = match_rules(fp, rules)
                 if r is not None:
                     plan.append(PlanItem(fp, fname, unit, 'place',
-                                         [r.folder()], via=f'规则:{r.rule_type}'))
+                                         [r.folder()], via=f'规则:{_RULE_CN.get(r.rule_type, r.rule_type)}'))
                     continue
             if opts.auto_id:
                 ids = find_ids(fname)

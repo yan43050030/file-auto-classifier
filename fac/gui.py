@@ -239,6 +239,14 @@ class App(_Base):
                         variable=self.var_dedup).pack(anchor='w', padx=8, pady=2)
         ttk.Separator(tab_a).pack(fill='x', padx=8, pady=4)
 
+        # 智能识别
+        self.var_intelligent = tk.BooleanVar(value=True)
+        ttk.Checkbutton(tab_a,
+                        text='智能识别:自动发现 10+ 文件中重复出现的人名,'
+                             '并从文件名推测姓名与身份证号对应关系'
+                             '(无需名单即可归类同名/同证号文件)',
+                        variable=self.var_intelligent).pack(anchor='w', padx=8, pady=2)
+
         # 高级分类规则
         rf = ttk.LabelFrame(tab_a, text='高级分类规则(名单未命中时按规则匹配:文件类型/大小/时间/自定义)')
         rf.pack(fill='both', padx=8, pady=(4, 4), expand=True)
@@ -390,9 +398,10 @@ class App(_Base):
         cb.pack(side='left'); row['_cb_sel'] = tk.BooleanVar(value=False)
         # 保留下划线以绑定变量到行
         ttk.Checkbutton(f, variable=row['_cb_sel'], text='').pack(side='left')
-        ttk.Combobox(f, textvariable=row['rule_type'], width=10, state='readonly',
-                     values=['ext','size_gt','size_lt','date_before','date_after',
-                             'contains','regex']).pack(side='left', padx=2)
+        ttk.Combobox(f, textvariable=row['rule_type'], width=12, state='readonly',
+                     values=['ext:扩展名','size_gt:文件大于','size_lt:文件小于',
+                             'date_before:修改时间早于','date_after:修改时间晚于',
+                             'contains:文件名包含','regex:正则匹配']).pack(side='left', padx=2)
         # 中文标签映射
         ttk.Label(f, text='值:', font=('', 8)).pack(side='left')
         ttk.Entry(f, textvariable=row['value'], width=18).pack(side='left', padx=2)
@@ -419,6 +428,8 @@ class App(_Base):
         rlist = []
         for row in self._rule_rows:
             t = row['rule_type'].get()
+            if ':' in t:
+                t = t.split(':', 1)[0]   # 'ext:扩展名' → 'ext'
             if t and row['value'].get().strip():
                 rlist.append(Rule(t, row['value'].get(), row['target'].get(),
                                   row['enabled'].get()))
@@ -486,6 +497,7 @@ class App(_Base):
             'pw_file': self.var_pwfile.get().strip(),
             'delete_ok': self.var_delok.get(),
             'rules': [r.to_dict() for r in self._get_rules()],
+            'intelligent': self.var_intelligent.get(),
         }
 
     def _apply_cfg(self, cfg):
@@ -505,6 +517,7 @@ class App(_Base):
             self.var_pwtxt.set(bool(cfg.get('auto_pw_txt', True)))
             self.var_pwfile.set(cfg.get('pw_file', ''))
             self.var_delok.set(bool(cfg.get('delete_ok', False)))
+            self.var_intelligent.set(bool(cfg.get('intelligent', True)))
             self._load_rules(cfg.get('rules', []))
         except Exception:
             pass
@@ -679,7 +692,8 @@ class App(_Base):
             auto_pw_txt=self.var_pwtxt.get(),
             pw_files=pw_files,
             delete_ok=delete_ok,
-            rules=self._get_rules())
+            rules=self._get_rules(),
+            intelligent=self.var_intelligent.get())
 
         self.btn_run.configure(state='disabled', text='正在处理...')
         self.btn_cancel.configure(state='normal', text='取消')

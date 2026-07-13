@@ -22,6 +22,7 @@ DEFAULTS = {
     'pw_file': '',
     'delete_ok': False,
     'rules': [],                 # [{'rule_type':...,'value':...,'target':...,'enabled':...},...]
+    'intelligent': True,         # 智能识别高频人名 + 姓名-证号关联
 }
 
 
