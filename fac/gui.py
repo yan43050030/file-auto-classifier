@@ -15,6 +15,7 @@ from PySide6.QtGui import QFont, QIcon, QAction
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QGroupBox, QListWidget, QListWidgetItem, QPushButton, QLabel,
+    QScrollBar,
     QLineEdit, QTabWidget, QPlainTextEdit, QTextEdit, QProgressBar,
     QComboBox, QCheckBox, QRadioButton, QButtonGroup, QFileDialog,
     QMessageBox, QInputDialog, QSplitter, QFrame, QSizePolicy, QMenu,
@@ -111,6 +112,22 @@ QHeaderView::section {{
     background: #F1F5F9; border: none; border-bottom: 1px solid {BORDER};
     padding: 6px 10px; font-size: 12px; font-weight: 600;
 }}
+QScrollBar:vertical {{
+    background: transparent; width: 8px; margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: #CBD5E1; border-radius: 4px; min-height: 30px;
+}}
+QScrollBar::handle:vertical:hover {{ background: #94A3B8; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar:horizontal {{
+    background: transparent; height: 8px;
+}}
+QScrollBar::handle:horizontal {{
+    background: #CBD5E1; border-radius: 4px; min-width: 30px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: #94A3B8; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 """
 
 # ---------- 主窗口 ----------
@@ -189,8 +206,8 @@ class MainWindow(QMainWindow):
             f'QTextEdit{{font-family:Consolas,"Microsoft YaHei UI";'
             f'font-size:11px;background:{CARD_BG};border:1px solid {BORDER};'
             f'border-radius:6px;padding:8px;}}')
-        self.log.setMaximumHeight(140)
-        bl.addWidget(self.log)
+        self.log.setMinimumHeight(80)
+        bl.addWidget(self.log, 1)    # stretch=1 随窗口缩放
         splitter.addWidget(bottom_w)
 
         # 初始比例:上 1.5 : 中 4 : 下 1.5
@@ -272,71 +289,66 @@ class MainWindow(QMainWindow):
 
         # ── 选项 tab ──
         to = QWidget()
-        ol = QVBoxLayout(to); ol.setSpacing(8); ol.setContentsMargins(12, 16, 12, 12)
+        ol = QVBoxLayout(to); ol.setSpacing(10); ol.setContentsMargins(16, 16, 16, 12)
         self._rb_multi = QButtonGroup(self)
-        r1 = QRadioButton('命中多人 → 归入最匹配的(最长关键字优先)')
+        r1 = QRadioButton('命中多人→归入最匹配的(最长关键字优先)')
         r1.setChecked(True)
         self._rb_multi.addButton(r1, 0)
         ol.addWidget(r1)
-        r2 = QRadioButton('命中多人 → 复制到每个文件夹')
+        r2 = QRadioButton('命中多人→复制到每个文件夹')
         self._rb_multi.addButton(r2, 1)
         ol.addWidget(r2)
         ol.addWidget(self._sep())
         ol.addWidget(QLabel('来源单位标注(单位=压缩包名):'))
         self._rg_unit = QButtonGroup(self)
-        u1 = QRadioButton('人员下按单位建子文件夹(推荐)'); u1.setChecked(True)
-        self._rg_unit.addButton(u1, 0)
-        ol.addWidget(u1)
+        u1 = QRadioButton('按单位建子文件夹(推荐)'); u1.setChecked(True)
+        self._rg_unit.addButton(u1, 0); ol.addWidget(u1)
         u2 = QRadioButton('文件名加【单位】前缀')
-        self._rg_unit.addButton(u2, 1)
-        ol.addWidget(u2)
+        self._rg_unit.addButton(u2, 1); ol.addWidget(u2)
         u3 = QRadioButton('不标注来源')
-        self._rg_unit.addButton(u3, 2)
-        ol.addWidget(u3)
+        self._rg_unit.addButton(u3, 2); ol.addWidget(u3)
         ol.addStretch()
         tabs.addTab(to, '⚙ 分类选项')
 
-        # ── 高级 tab ──
+        # ── 高级 tab(双列网格) ──
         ta = QWidget()
-        al = QVBoxLayout(ta); al.setSpacing(6); al.setContentsMargins(12, 12, 12, 12)
-        # 统一用 dict 管理所有 checkbox,key=配置键名,value=(QCheckBox, 默认值)
+        al = QVBoxLayout(ta); al.setSpacing(8); al.setContentsMargins(16, 12, 16, 12)
         self._ck = {}
-        for ck_key, ck_label, ck_default, ck_tab in [
-            ('auto_id', '自动识别身份证号(18/15位,带校验码)', True, 'options'),
-            ('preview', '试运行预览:先看清单,确认后再执行', True, 'options'),
-            ('content_match', '内容匹配:读 Excel/Word/PDF/文本内容查人', False, 'advanced'),
-            ('split_excel', 'Excel 按人拆分:多人的表按行拆每人一份(原表保留)', False, 'advanced'),
-            ('dedup', '内容去重:同文件夹内相同文件只留一份', False, 'advanced'),
-            ('intelligent', '智能识别:自动发现 10+ 文件中重复出现的人名,'
-                           '并从文件名推测姓名↔身份证号对应关系', True, 'advanced'),
-            ('auto_pw_txt', '自动把输入文件夹的 .txt 当密码本', True, 'advanced'),
-            ('delete_ok', '⚠ 成功后删除已解压压缩包(移入回收站)', False, 'advanced'),
-        ]:
-            cb = QCheckBox(ck_label)
-            cb.setChecked(ck_default)
-            self._ck[ck_key] = cb
-            if ck_tab == 'options':
-                ol.insertWidget(ol.count() - 1, cb)    # 插在 stretch 之前
-            else:
-                al.addWidget(cb)
-        # 在高级 tab 中智能识别后加分隔线
-        al.insertWidget(al.indexOf(self._ck['auto_pw_txt']), self._sep())
-        al.addWidget(QLabel('高级分类规则(名单/智能未命中时按匹配):'))
+        grid = QGridLayout(); grid.setSpacing(8)
+        ck_specs = [
+            ('auto_id', '自动识别身份证号(18/15位,带校验码)', True),
+            ('preview', '试运行预览:先看清单,确认后再执行', True),
+            ('content_match', '内容匹配:读 Excel/Word/PDF/文本查人', False),
+            ('split_excel', 'Excel 按人拆分:多人表按行拆每人一份(原表保留)', False),
+            ('dedup', '内容去重:同文件夹内文件只留一份', False),
+            ('intelligent', '智能识别:10+文件中发现人名,推测姓名↔证号', True),
+            ('auto_pw_txt', '自动把 .txt 当密码本', True),
+            ('delete_ok', '⚠ 成功后删除压缩包(移入回收站)', False),
+        ]
+        for idx, (key, label, default) in enumerate(ck_specs):
+            cb = QCheckBox(label); cb.setChecked(default); self._ck[key] = cb
+            grid.addWidget(cb, idx // 2, idx % 2)
+        al.addLayout(grid)
+        al.addWidget(self._sep())
+
+        al.addWidget(QLabel('高级分类规则(名单/智能未命中时按规则从上到下依次匹配):'))
         self._rule_area = QScrollArea()
         self._rule_area.setWidgetResizable(True)
         self._rule_inner = QWidget()
         self._rule_layout = QVBoxLayout(self._rule_inner)
-        self._rule_layout.setSpacing(2); self._rule_layout.setContentsMargins(0, 0, 0, 0)
+        self._rule_layout.setSpacing(2); self._rule_layout.setContentsMargins(0, 2, 0, 2)
         self._rule_layout.addStretch()
         self._rule_area.setWidget(self._rule_inner)
-        self._rule_area.setMinimumHeight(80)
-        al.addWidget(self._rule_area, 1)    # stretch=1,随窗口缩放自动扩展
-        rb2 = QHBoxLayout()
-        b = QPushButton('+ 添加规则'); b.clicked.connect(self._add_rule); rb2.addWidget(b)
-        b = QPushButton('- 移除此规则'); b.clicked.connect(self._del_rule); rb2.addWidget(b)
-        rb2.addStretch()
-        al.addLayout(rb2)
+        self._rule_area.setMinimumHeight(100)
+        al.addWidget(self._rule_area, 1)
+
+        rb2 = QHBoxLayout(); rb2.setSpacing(8)
+        for txt, slot in [('+ 添加规则', self._add_rule), ('- 移除此规则', self._del_rule)]:
+            b = QPushButton(txt); b.setFixedHeight(30); b.clicked.connect(slot)
+            rb2.addWidget(b)
+        rb2.addStretch(); al.addLayout(rb2)
         al.addWidget(self._sep())
+
         pwf = QHBoxLayout(); pwf.setSpacing(6)
         pwf.addWidget(QLabel('额外密码本:'))
         self.txt_pwfile = QLineEdit()
@@ -344,7 +356,6 @@ class MainWindow(QMainWindow):
         b = QPushButton('选择'); b.setFixedHeight(30); b.clicked.connect(self._choose_pw)
         pwf.addWidget(b)
         al.addLayout(pwf)
-        al.addStretch()
         tabs.addTab(ta, '🔧 高级功能')
 
         lay.addWidget(tabs)
