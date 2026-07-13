@@ -138,19 +138,26 @@ class MainWindow(QMainWindow):
         cw = QWidget()
         self.setCentralWidget(cw)
         main = QVBoxLayout(cw)
-        main.setContentsMargins(16, 12, 16, 12)
-        main.setSpacing(10)
+        main.setContentsMargins(12, 8, 12, 8)
+        main.setSpacing(8)
 
-        # ── 第 1 行:输入区 + 输出区 ──
-        top_row = QHBoxLayout(); top_row.setSpacing(12)
+        # ── 用 QSplitter 让各部分可拖拽调整大小 ──
+        splitter = QSplitter(Qt.Vertical)
+
+        # 上半区:输入 + 输出(水平排)
+        top_w = QWidget()
+        top_row = QHBoxLayout(top_w); top_row.setSpacing(12); top_row.setContentsMargins(0, 0, 0, 0)
         top_row.addWidget(self._build_input_card(), 3)
         top_row.addWidget(self._build_output_card(), 2)
-        main.addLayout(top_row)
+        splitter.addWidget(top_w)
 
-        # ── 第 2 行:设置区(名单/选项/高级) ──
-        main.addWidget(self._build_settings_card(), 4)
+        # 中区:设置(名单/选项/高级)
+        splitter.addWidget(self._build_settings_card())
 
-        # ── 第 3 行:操作按钮 ──
+        # 下半区:操作按钮 + 进度 + 日志
+        bottom_w = QWidget()
+        bl = QVBoxLayout(bottom_w); bl.setSpacing(6); bl.setContentsMargins(0, 0, 0, 0)
+
         btn_row = QHBoxLayout(); btn_row.setSpacing(12)
         self.btn_run = QPushButton('▶  开始分类')
         self.btn_run.setObjectName('btnRun')
@@ -159,35 +166,40 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.btn_run)
         self.btn_cancel = QPushButton('取消')
         self.btn_cancel.setObjectName('btnCancel')
-        self.btn_cancel.setVisible(False)
+        self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._cancel_job)
         btn_row.addWidget(self.btn_cancel)
         btn_row.addStretch()
         self.btn_open = QPushButton('📂 打开结果文件夹')
         self.btn_open.clicked.connect(self._open_out)
         btn_row.addWidget(self.btn_open)
-        main.addLayout(btn_row)
+        bl.addLayout(btn_row)
 
-        # ── 第 4 行:进度 + 日志 ──
         self.progress = QProgressBar()
         self.progress.setFixedHeight(8)
         self.progress.setVisible(False)
-        main.addWidget(self.progress)
+        bl.addWidget(self.progress)
         self.lbl_prog = QLabel('')
         self.lbl_prog.setStyleSheet(f'color:{TEXT_SEC};font-size:11px;')
         self.lbl_prog.setVisible(False)
-        main.addWidget(self.lbl_prog)
+        bl.addWidget(self.lbl_prog)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setStyleSheet(
             f'QTextEdit{{font-family:Consolas,"Microsoft YaHei UI";'
             f'font-size:11px;background:{CARD_BG};border:1px solid {BORDER};'
             f'border-radius:6px;padding:8px;}}')
-        self.log.setMaximumHeight(160)
-        main.addWidget(self.log)
+        self.log.setMaximumHeight(140)
+        bl.addWidget(self.log)
+        splitter.addWidget(bottom_w)
 
-        self.resize(960, 700)
-        self.setMinimumSize(780, 560)
+        # 初始比例:上 1.5 : 中 4 : 下 1.5
+        splitter.setSizes([150, 400, 150])
+
+        main.addWidget(splitter)
+
+        self.resize(1000, 750)
+        self.setMinimumSize(800, 600)
 
     def _build_input_card(self):
         gb = QGroupBox('①  选择压缩包 / 文件夹 / 文件')
@@ -291,7 +303,7 @@ class MainWindow(QMainWindow):
         self._ck = {}
         for ck_key, ck_label, ck_default, ck_tab in [
             ('auto_id', '自动识别身份证号(18/15位,带校验码)', True, 'options'),
-            ('preview', '试运行预览:先看清单,确认后再执行', False, 'options'),
+            ('preview', '试运行预览:先看清单,确认后再执行', True, 'options'),
             ('content_match', '内容匹配:读 Excel/Word/PDF/文本内容查人', False, 'advanced'),
             ('split_excel', 'Excel 按人拆分:多人的表按行拆每人一份(原表保留)', False, 'advanced'),
             ('dedup', '内容去重:同文件夹内相同文件只留一份', False, 'advanced'),
@@ -317,8 +329,8 @@ class MainWindow(QMainWindow):
         self._rule_layout.setSpacing(2); self._rule_layout.setContentsMargins(0, 0, 0, 0)
         self._rule_layout.addStretch()
         self._rule_area.setWidget(self._rule_inner)
-        self._rule_area.setMaximumHeight(140)
-        al.addWidget(self._rule_area)
+        self._rule_area.setMinimumHeight(80)
+        al.addWidget(self._rule_area, 1)    # stretch=1,随窗口缩放自动扩展
         rb2 = QHBoxLayout()
         b = QPushButton('+ 添加规则'); b.clicked.connect(self._add_rule); rb2.addWidget(b)
         b = QPushButton('- 移除此规则'); b.clicked.connect(self._del_rule); rb2.addWidget(b)
@@ -717,7 +729,6 @@ class MainWindow(QMainWindow):
 
         self.btn_run.setEnabled(False)
         self.btn_run.setText('处理中...')
-        self.btn_cancel.setVisible(True)
         self.btn_cancel.setEnabled(True)
         self.btn_cancel.setText('取消')
         self.progress.setValue(0)
@@ -742,7 +753,8 @@ class MainWindow(QMainWindow):
     def _on_done(self, summary):
         self.btn_run.setEnabled(True)
         self.btn_run.setText('▶  开始分类')
-        self.btn_cancel.setVisible(False)
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.setText('取消')
         self.progress.setValue(0 if summary.get('cancelled') else 100)
         self.lbl_prog.setText('已取消' if summary.get('cancelled') else '完成')
         if summary.get('cancelled'):
