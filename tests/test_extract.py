@@ -122,7 +122,7 @@ def test_encrypted_zip_cancel(tmp_path):
         z.writestr('f.txt', 'x')
     dest = tmp_path / 'out'
     dest.mkdir()
-    assert not ex.extract_archive(str(a), str(dest), log, pm())  # ask 返回 None
+    assert ex.extract_archive(str(a), str(dest), log, pm()) == 'skip_pw'  # ask 返回 None
 
 
 # ---------- 7z ----------
@@ -196,7 +196,7 @@ def test_nested_extraction(tmp_path):
     dest = tmp_path / 'out'
     dest.mkdir()
     failures = []
-    assert ex.extract_all_recursive(str(lvl1), str(dest), log, pm(), failures)
+    assert ex.extract_all_recursive(str(lvl1), str(dest), log, pm(), failures, [])
     assert not failures
     found = [f for _r, _d, fs in os.walk(dest) for f in fs if f == '最里层.txt']
     assert len(found) == 1
@@ -212,5 +212,5 @@ def test_nested_failure_collected(tmp_path):
     dest = tmp_path / 'out'
     dest.mkdir()
     failures = []
-    assert ex.extract_all_recursive(str(outer), str(dest), log, pm(), failures)
+    assert ex.extract_all_recursive(str(outer), str(dest), log, pm(), failures, [])
     assert len(failures) == 1 and failures[0].endswith('bad.zip')

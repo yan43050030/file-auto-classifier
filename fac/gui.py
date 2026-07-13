@@ -8,6 +8,7 @@
 
 import os
 import sys
+import datetime
 import threading
 
 import tkinter as tk
@@ -17,6 +18,7 @@ from . import VERSION, APP_NAME
 from .util import resource_path
 from .roster import Roster
 from .pipeline import JobOptions, run_job
+from .rules import Rule
 from . import config as conf
 from . import extract as ex
 
@@ -126,15 +128,32 @@ class App(_Base):
         pad = {'padx': 8, 'pady': 4}
 
         # --- 1. 输入 ---
-        f1 = ttk.LabelFrame(self, text='第一步:选择压缩包(可多选)或含压缩包的文件夹')
+        f1 = ttk.LabelFrame(self, text='第一步:选择压缩包/文件夹,或直接选非压缩包文件也可分类')
         f1.pack(fill='x', **pad)
         self.lb_inputs = tk.Listbox(f1, height=4)
         self.lb_inputs.pack(side='left', fill='x', expand=True, padx=6, pady=6)
+        self.lb_inputs.bind('<Delete>', lambda e: self.remove_selected())
+        # 右键菜单
+        self._rmenu = tk.Menu(self.lb_inputs, tearoff=0)
+        self._rmenu.add_command(label='移除选中', command=self.remove_selected)
+        self._rmenu.add_command(label='清空全部', command=self.clear_inputs)
+        def _rclick(event):
+            try:
+                i = self.lb_inputs.nearest(event.y)
+                if i not in self.lb_inputs.curselection():
+                    self.lb_inputs.selection_clear(0, 'end')
+                    self.lb_inputs.selection_set(i)
+            except Exception:
+                pass
+            self._rmenu.post(event.x_root, event.y_root)
+        self.lb_inputs.bind('<Button-3>', _rclick)
         b1 = ttk.Frame(f1)
         b1.pack(side='right', padx=6)
         ttk.Button(b1, text='添加压缩包', command=self.add_files).pack(fill='x', pady=2)
         ttk.Button(b1, text='添加文件夹', command=self.add_folder).pack(fill='x', pady=2)
-        ttk.Button(b1, text='清空', command=self.clear_inputs).pack(fill='x', pady=2)
+        ttk.Button(b1, text='添加文件', command=self.add_loose_files).pack(fill='x', pady=2)
+        ttk.Button(b1, text='移除选中', command=self.remove_selected).pack(fill='x', pady=2)
+        ttk.Button(b1, text='清空全部', command=self.clear_inputs).pack(fill='x', pady=2)
         self.lbl_dnd = ttk.Label(b1, text='', foreground='#888')
         self.lbl_dnd.pack()
 
@@ -219,6 +238,32 @@ class App(_Base):
         ttk.Checkbutton(tab_a, text='内容去重:同一人员文件夹内,多个单位反馈的相同文件只留一份',
                         variable=self.var_dedup).pack(anchor='w', padx=8, pady=2)
         ttk.Separator(tab_a).pack(fill='x', padx=8, pady=4)
+
+        # 高级分类规则
+        rf = ttk.LabelFrame(tab_a, text='高级分类规则(名单未命中时按规则匹配:文件类型/大小/时间/自定义)')
+        rf.pack(fill='both', padx=8, pady=(4, 4), expand=True)
+        rtop = ttk.Frame(rf); rtop.pack(fill='x', padx=6, pady=(6, 2))
+        ttk.Button(rtop, text='+ 添加规则', command=self.add_rule).pack(side='left')
+        ttk.Button(rtop, text='移除此规则', command=self.del_rule).pack(side='left', padx=4)
+        self._rule_frame = ttk.Frame(rf)
+        self._rule_frame.pack(fill='both', expand=True, padx=6, pady=(2, 6))
+        # 规则面板用 canvas+scrollbar 防溢出
+        self._rule_canvas = tk.Canvas(self._rule_frame, height=120, highlightthickness=0)
+        self._rule_scroll = ttk.Scrollbar(self._rule_frame, orient='vertical',
+                                           command=self._rule_canvas.yview)
+        self._rule_inner = ttk.Frame(self._rule_canvas)
+        self._rule_canvas.configure(yscrollcommand=self._rule_scroll.set)
+        self._rule_canvas.pack(side='left', fill='both', expand=True)
+        self._rule_scroll.pack(side='right', fill='y')
+        self._rule_canvas.create_window((0, 0), window=self._rule_inner,
+                                        anchor='nw', tags='inner')
+        self._rule_inner.bind('<Configure>',
+            lambda e: self._rule_canvas.configure(scrollregion=self._rule_canvas.bbox('all')))
+        self._rule_canvas.bind('<Configure>',
+            lambda e: self._rule_canvas.itemconfig('inner', width=e.width))
+        self._rule_rows = []   # 每行的 widget 字典
+
+        ttk.Separator(tab_a).pack(fill='x', padx=8, pady=4)
         self.var_pwtxt = tk.BooleanVar(value=True)
         ttk.Checkbutton(tab_a, text='自动把输入文件夹里的 .txt 当密码本:加密包先自动尝试,失败再弹框',
                         variable=self.var_pwtxt).pack(anchor='w', padx=8, pady=2)
@@ -266,9 +311,14 @@ class App(_Base):
         if os.path.isdir(path):
             self.inputs.append(path)
             self.lb_inputs.insert('end', path + '  (文件夹)')
-        elif os.path.isfile(path) and ex.is_archive(os.path.basename(path)):
+        elif os.path.isfile(path):
             self.inputs.append(path)
             self.lb_inputs.insert('end', path)
+        # 首次添加输入时自动预填输出目录
+        if len(self.inputs) == 1 and not self.var_out.get().strip():
+            base = path if os.path.isdir(path) else os.path.dirname(path)
+            dft = os.path.join(base, f'分类结果_{datetime.datetime.now():%Y%m%d}')
+            self.var_out.set(dft)
 
     def add_files(self):
         files = filedialog.askopenfilenames(
@@ -282,6 +332,20 @@ class App(_Base):
         d = filedialog.askdirectory(title='选择含压缩包的文件夹')
         if d:
             self._add_input(d)
+
+    def add_loose_files(self):
+        files = filedialog.askopenfilenames(
+            title='选择要直接分类的文件(非压缩包也可以)',
+            filetypes=[('所有文件', '*.*')])
+        for f in files:
+            self._add_input(f)
+
+    def remove_selected(self):
+        sel = list(self.lb_inputs.curselection())
+        for i in sorted(sel, reverse=True):
+            if i < len(self.inputs):
+                del self.inputs[i]
+            self.lb_inputs.delete(i)
 
     def clear_inputs(self):
         self.inputs = []
@@ -298,6 +362,77 @@ class App(_Base):
             filetypes=[('文本文件', '*.txt'), ('所有文件', '*.*')])
         if f:
             self.var_pwfile.set(f)
+
+    # ---------- 高级分类规则 UI ----------
+
+    def add_rule(self):
+        """添加一条新规则(默认按扩展名匹配)."""
+        row = {'rule_type': tk.StringVar(value='ext'),
+               'value': tk.StringVar(), 'target': tk.StringVar(),
+               'enabled': tk.BooleanVar(value=True)}
+        self._rule_rows.append(row)
+        self._build_rule_row(len(self._rule_rows) - 1, row)
+
+    def del_rule(self):
+        for i, row in enumerate(self._rule_rows):
+            try:
+                if row.get('_cb_sel') and row['_cb_sel'].get():
+                    del self._rule_rows[i]
+                    self._rebuild_rule_ui()
+                    return
+            except Exception:
+                pass
+
+    def _build_rule_row(self, idx, row):
+        f = ttk.Frame(self._rule_inner)
+        f.pack(fill='x', pady=1)
+        cb = ttk.Checkbutton(f, variable=row['enabled'], width=2)
+        cb.pack(side='left'); row['_cb_sel'] = tk.BooleanVar(value=False)
+        # 保留下划线以绑定变量到行
+        ttk.Checkbutton(f, variable=row['_cb_sel'], text='').pack(side='left')
+        ttk.Combobox(f, textvariable=row['rule_type'], width=10, state='readonly',
+                     values=['ext','size_gt','size_lt','date_before','date_after',
+                             'contains','regex']).pack(side='left', padx=2)
+        # 中文标签映射
+        ttk.Label(f, text='值:', font=('', 8)).pack(side='left')
+        ttk.Entry(f, textvariable=row['value'], width=18).pack(side='left', padx=2)
+        ttk.Label(f, text='归入:', font=('', 8)).pack(side='left')
+        ttk.Entry(f, textvariable=row['target'], width=14).pack(side='left', padx=2)
+        # 规则类型提示
+        hints = {'ext':'扩展名如 pdf','size_gt':'大于如 10MB','size_lt':'小于',
+                 'date_before':'日期前如 2024','date_after':'日期后',
+                 'contains':'包含文字','regex':'正则如 \\d{4}年'}
+        lbl_h = ttk.Label(f, text='', foreground='#999', font=('', 7), width=18, anchor='w')
+        def _update_hint(*a, r=row, h=lbl_h):
+            h.configure(text=hints.get(r['rule_type'].get(), ''))
+        row['rule_type'].trace_add('write', _update_hint)
+        _update_hint()
+        lbl_h.pack(side='left', padx=4)
+
+    def _rebuild_rule_ui(self):
+        for w in self._rule_inner.winfo_children():
+            w.destroy()
+        for i, row in enumerate(self._rule_rows):
+            self._build_rule_row(i, row)
+
+    def _get_rules(self):
+        rlist = []
+        for row in self._rule_rows:
+            t = row['rule_type'].get()
+            if t and row['value'].get().strip():
+                rlist.append(Rule(t, row['value'].get(), row['target'].get(),
+                                  row['enabled'].get()))
+        return rlist
+
+    def _load_rules(self, rules_data):
+        self._rule_rows.clear()
+        for d in (rules_data or []):
+            row = {'rule_type': tk.StringVar(value=d.get('rule_type','ext')),
+                   'value': tk.StringVar(value=d.get('value','')),
+                   'target': tk.StringVar(value=d.get('target','')),
+                   'enabled': tk.BooleanVar(value=bool(d.get('enabled', True)))}
+            self._rule_rows.append(row)
+        self._rebuild_rule_ui()
 
     def open_out(self):
         out = self.var_out.get().strip()
@@ -350,6 +485,7 @@ class App(_Base):
             'auto_pw_txt': self.var_pwtxt.get(),
             'pw_file': self.var_pwfile.get().strip(),
             'delete_ok': self.var_delok.get(),
+            'rules': [r.to_dict() for r in self._get_rules()],
         }
 
     def _apply_cfg(self, cfg):
@@ -369,6 +505,7 @@ class App(_Base):
             self.var_pwtxt.set(bool(cfg.get('auto_pw_txt', True)))
             self.var_pwfile.set(cfg.get('pw_file', ''))
             self.var_delok.set(bool(cfg.get('delete_ok', False)))
+            self._load_rules(cfg.get('rules', []))
         except Exception:
             pass
 
@@ -427,16 +564,21 @@ class App(_Base):
     # ---------- 后台线程与主线程的交互 ----------
 
     def ask_password(self, archive_name, attempt):
-        """在主线程弹出密码输入框,供后台线程调用(阻塞等待用户输入)。"""
+        """在主线程弹出密码输入框,供后台线程调用(阻塞等待用户输入)。
+        取消或留空 → 压缩包放入「暂未解压」文件夹,不影响其他分类。"""
         result = {}
         ev = threading.Event()
 
         def _prompt():
             from tkinter import simpledialog
             if attempt > 1:
-                msg = f'密码错误,请重新输入。\n\n压缩包「{archive_name}」需要解压密码:'
+                msg = (f'密码错误,请重新输入。\n\n'
+                       f'压缩包「{archive_name}」需要解压密码:\n'
+                       f'(取消 → 放入「暂未解压」文件夹,可稍后再处理)')
             else:
-                msg = f'该压缩包有密码。\n\n压缩包「{archive_name}」需要解压密码:'
+                msg = (f'该压缩包有密码。\n\n'
+                       f'压缩包「{archive_name}」需要解压密码:\n'
+                       f'(取消或留空 → 放入「暂未解压」文件夹,可稍后再处理)')
             result['pwd'] = simpledialog.askstring(
                 '需要解压密码', msg, show='*', parent=self)
             ev.set()
@@ -536,7 +678,8 @@ class App(_Base):
             dedup=self.var_dedup.get(),
             auto_pw_txt=self.var_pwtxt.get(),
             pw_files=pw_files,
-            delete_ok=delete_ok)
+            delete_ok=delete_ok,
+            rules=self._get_rules())
 
         self.btn_run.configure(state='disabled', text='正在处理...')
         self.btn_cancel.configure(state='normal', text='取消')
@@ -555,6 +698,8 @@ class App(_Base):
                 if summary['cancelled']:
                     return
                 msg = f'分类完成!共处理 {summary["files"]} 个文件。'
+                if summary.get('skipped_pw'):
+                    msg += f'\n{summary["skipped_pw"]} 个加密包未解压,见「暂未解压」文件夹。'
                 if summary['failed']:
                     msg += f'\n{summary["failed"]} 个压缩包解压失败,见「解压失败」文件夹。'
                 if summary['reports']:

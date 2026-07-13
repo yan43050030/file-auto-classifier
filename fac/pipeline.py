@@ -14,6 +14,7 @@ import traceback
 from .util import unique_path, safe_folder_name, long_path, delete_to_trash, sha1_of
 from .password import PasswordManager, load_password_candidates
 from .idcard import find_ids
+from .rules import Rule, match_rules
 from . import extract as ex
 from .report import write_matrix_report
 
@@ -30,7 +31,8 @@ class JobOptions:
                  unit_mode='subfolder',          # subfolder | prefix | none
                  preview=False,
                  content_match=False, split_excel=False, dedup=False,
-                 auto_pw_txt=True, pw_files=None, delete_ok=False):
+                 auto_pw_txt=True, pw_files=None, delete_ok=False,
+                 rules=None):
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.roster = roster
@@ -44,6 +46,7 @@ class JobOptions:
         self.auto_pw_txt = auto_pw_txt
         self.pw_files = list(pw_files or [])
         self.delete_ok = delete_ok
+        self.rules = list(rules or [])    # 高级分类规则列表
 
 
 class PlanItem:
@@ -64,20 +67,30 @@ class PlanItem:
         return '、'.join(self.targets)
 
 
-def _collect_archives(inputs, auto_pw_txt, log):
-    """收集压缩包与候选密码本 txt。返回 (archives, txt_paths)。"""
-    archives, txt_paths, txt_dirs = [], [], set()
+def _collect_inputs(inputs, auto_pw_txt, log):
+    """收集压缩包、非压缩包文件、候选密码本 txt。
+    返回 (archives, loose_files, txt_paths)。
+    loose_files 是 (文件路径, 来源单位) 列表,归类时跟解压出来的文件一视同仁。"""
+    archives, loose_files, txt_paths, txt_dirs = [], [], [], set()
     for p in inputs:
         if os.path.isdir(p):
+            folder_name = os.path.basename(os.path.abspath(p))
+            has_direct = False
             for root, _, files in os.walk(p):
                 for f in files:
                     kind = ex.archive_kind(f)
                     if kind == 'volume-later':
-                        continue    # 后续分卷由首卷带出
+                        continue
+                    fp = os.path.join(root, f)
                     if kind:
-                        archives.append(os.path.join(root, f))
-                    elif auto_pw_txt and f.lower().endswith('.txt'):
-                        txt_paths.append(os.path.join(root, f))
+                        archives.append(fp)
+                    else:
+                        # 非压缩包的直接文件也要分类(但排除 txt 密码本)
+                        if auto_pw_txt and f.lower().endswith('.txt'):
+                            txt_paths.append(fp)
+                        else:
+                            loose_files.append((fp, folder_name))
+                            has_direct = True
         elif os.path.isfile(p) and ex.is_archive(os.path.basename(p)):
             if ex.archive_kind(os.path.basename(p)) == 'volume-later':
                 log(f'  [提示] {os.path.basename(p)} 是分卷的后续卷,'
@@ -86,6 +99,10 @@ def _collect_archives(inputs, auto_pw_txt, log):
             archives.append(p)
             if auto_pw_txt:
                 txt_dirs.add(os.path.dirname(p))
+        elif os.path.isfile(p):
+            # 单独选中的非压缩包文件也直接分类
+            unit = os.path.basename(os.path.dirname(p))
+            loose_files.append((p, unit))
         else:
             log(f'  [提示] 跳过无法识别的输入: {p}')
     for d in txt_dirs:
@@ -99,7 +116,7 @@ def _collect_archives(inputs, auto_pw_txt, log):
     archives = [x for x in archives if not (x in seen or seen.add(x))]
     seen = set()
     txt_paths = [x for x in txt_paths if not (x in seen or seen.add(x))]
-    return archives, txt_paths
+    return archives, loose_files, txt_paths
 
 
 def run_job(opts: JobOptions, log, progress, ask_password,
@@ -173,14 +190,18 @@ def run_job(opts: JobOptions, log, progress, ask_password,
 
     tmp = None
     try:
-        # ---- 1. 收集压缩包与密码本 ----
-        archives, txt_paths = _collect_archives(
+        # ---- 1. 收集输入(压缩包 + 非压缩包直接文件)与密码本 ----
+        archives, loose_files, txt_paths = _collect_inputs(
             opts.inputs, opts.auto_pw_txt, tee)
         txt_paths = list(opts.pw_files) + \
             [t for t in txt_paths if t not in opts.pw_files]
-        if not archives:
-            tee('未找到任何压缩包(zip/7z/rar/tar/gz)。请检查所选路径。')
+        if not archives and not loose_files:
+            tee('未找到任何压缩包或文件。请检查所选路径。')
             return
+        if loose_files:
+            tee(f'发现 {len(loose_files)} 个非压缩包文件,将直接分类(不经过解压)。')
+        if not archives:
+            tee('未找到压缩包,将仅对直接文件分类。')
 
         seeds = load_password_candidates(txt_paths, tee) if txt_paths else []
         if seeds:
@@ -191,10 +212,11 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         # ---- 2. 解压(临时目录放在输出盘,之后用"移动"归档,少写一遍盘) ----
         tmp = tempfile.mkdtemp(prefix='.分类tmp_', dir=opts.out_dir)
         failed_dir = os.path.join(opts.out_dir, '解压失败')
+        skipped_pw_dir = os.path.join(opts.out_dir, '暂未解压')
 
-        def stash_failed(arc_path):
-            os.makedirs(failed_dir, exist_ok=True)
-            dst = unique_path(failed_dir, os.path.basename(arc_path))
+        def stash(arc_path, folder):
+            os.makedirs(folder, exist_ok=True)
+            dst = unique_path(folder, os.path.basename(arc_path))
             try:
                 shutil.copy2(long_path(arc_path), long_path(dst))
             except Exception as e:
@@ -210,15 +232,20 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             sub = os.path.join(tmp, f'arc_{i}')
             os.makedirs(sub, exist_ok=True)
             failures = []
-            ok = ex.extract_all_recursive(arc, sub, tee, pm, failures,
-                                          cancel=cancel_event)
+            skip_pws = []
+            result = ex.extract_all_recursive(
+                arc, sub, tee, pm, failures, skip_pws, cancel=cancel_event)
             ck()
-            if ok and not failures:
+            if result == 'ok' and not failures and not skip_pws:
                 success_archives.append(arc)
             for fa in failures:
-                stash_failed(fa)
+                stash(fa, failed_dir)
                 summary['failed'] += 1
-            extracted.append((sub, ex.unit_name(arc)))
+            for sp in skip_pws:
+                stash(sp, skipped_pw_dir)
+                summary['skipped_pw'] = summary.get('skipped_pw', 0) + 1
+            if result == 'ok' or result == 'skip_pw':
+                extracted.append((sub, ex.unit_name(arc)))
         progress('extract', len(archives), len(archives))
 
         # ---- 3. 匹配人员,生成归档计划 ----
@@ -230,6 +257,9 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                     if ex.is_archive(f):
                         continue   # 只分类最终解压出的文件
                     all_files.append((os.path.join(root, f), f, unit))
+        # 非压缩包的直接文件也加入分类
+        for fp, unit in loose_files:
+            all_files.append((fp, os.path.basename(fp), unit))
 
         use_content = opts.content_match and len(opts.roster) > 0
         use_split = opts.split_excel
@@ -238,6 +268,10 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             if use_split and not HAS_XLSX:
                 tee('  [提示] 未安装 openpyxl,Excel 拆分功能不可用,已忽略。')
                 use_split = False
+
+        rules = [r for r in (opts.rules or []) if r.enabled]
+        if rules:
+            tee(f'已启用 {len(rules)} 条高级分类规则。')
 
         plan = []
         for i, (fp, fname, unit) in enumerate(all_files, 1):
@@ -263,6 +297,13 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                                      [p.folder for p in persons],
                                      persons, via))
                 continue
+            # 高级分类规则(名单未命中 → 按文件类型/大小/时间/自定义字符/正则)
+            if rules:
+                r = match_rules(fp, rules)
+                if r is not None:
+                    plan.append(PlanItem(fp, fname, unit, 'place',
+                                         [r.folder()], via=f'规则:{r.rule_type}'))
+                    continue
             if opts.auto_id:
                 ids = find_ids(fname)
                 if ids:
@@ -299,6 +340,9 @@ def run_job(opts: JobOptions, log, progress, ask_password,
 
         # ---- 6. 汇总 + 反馈核对表 ----
         tee(f'\n分类完成!共处理 {summary["files"]} 个文件。')
+        if summary.get('skipped_pw'):
+            tee(f'有 {summary["skipped_pw"]} 个加密压缩包因未提供密码,'
+                f'已放入「暂未解压」文件夹(可稍后单独处理)。')
         if summary['failed']:
             tee(f'有 {summary["failed"]} 个压缩包解压失败,'
                 f'已放入「解压失败」文件夹。')

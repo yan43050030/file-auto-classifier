@@ -153,6 +153,7 @@ def _fix_zip_name(info) -> str:
 # ---------- zip ----------
 
 def _extract_zip(archive_path, dest_dir, log, pm):
+    """返回 'ok' | 'skip_pw' | 'fail'。"""
     name = os.path.basename(archive_path)
     with _ZipOpen(archive_path) as zf:
         infos = zf.infolist()
@@ -174,7 +175,7 @@ def _extract_zip(archive_path, dest_dir, log, pm):
             got = _find_password(name, pm, log, test)
             if got is False:
                 log(f'  [跳过] 未提供正确密码: {name}')
-                return False
+                return 'skip_pw'
             pwd = got.encode('utf-8')
         for info in infos:
             fname = _fix_zip_name(info)
@@ -188,7 +189,7 @@ def _extract_zip(archive_path, dest_dir, log, pm):
             os.makedirs(long_path(os.path.dirname(target)), exist_ok=True)
             with zf.open(info, pwd=pwd) as src, open(long_path(target), 'wb') as out:
                 shutil.copyfileobj(src, out)
-    return True
+    return 'ok'
 
 
 # ---------- 7z ----------
@@ -260,11 +261,12 @@ def _7z_extract_all(archive_path, dest_dir, pwd, log):
 
 
 def _extract_7z(archive_path, dest_dir, log, pm):
+    """返回 'ok' | 'skip_pw' | 'fail'。"""
     name = os.path.basename(archive_path)
     if not _7z_needs_password(archive_path):
         try:
             _7z_extract_all(archive_path, dest_dir, None, log)
-            return True
+            return 'ok'
         except Exception:
             pass  # 少数加密头的包 needs_password 误报 False,落入密码流程
 
@@ -272,9 +274,9 @@ def _extract_7z(archive_path, dest_dir, log, pm):
                          lambda p: _test_7z_password(archive_path, p))
     if got is False:
         log(f'  [跳过] 未提供正确密码: {name}')
-        return False
+        return 'skip_pw'
     _7z_extract_all(archive_path, dest_dir, got, log)
-    return True
+    return 'ok'
 
 
 # ---------- rar ----------
@@ -308,6 +310,7 @@ def _rar_extract_all(archive_path, dest_dir, pwd, log):
 
 
 def _extract_rar(archive_path, dest_dir, log, pm):
+    """返回 'ok' | 'skip_pw' | 'fail'。"""
     name = os.path.basename(archive_path)
     try:
         needs = rarfile.RarFile(archive_path).needs_password()
@@ -315,20 +318,21 @@ def _extract_rar(archive_path, dest_dir, log, pm):
         needs = True
     if not needs:
         _rar_extract_all(archive_path, dest_dir, None, log)
-        return True
+        return 'ok'
 
     got = _find_password(name, pm, log,
                          lambda p: _test_rar_password(archive_path, p))
     if got is False:
         log(f'  [跳过] 未提供正确密码: {name}')
-        return False
+        return 'skip_pw'
     _rar_extract_all(archive_path, dest_dir, got, log)
-    return True
+    return 'ok'
 
 
 # ---------- tar / gz ----------
 
 def _extract_tar(archive_path, dest_dir, log, pm):
+    """返回 'ok' (tar 无密码,始终返回 ok 或 raise)。"""
     with tarfile.open(archive_path) as tf:
         for m in tf:
             if not m.isreg():
@@ -343,22 +347,24 @@ def _extract_tar(archive_path, dest_dir, log, pm):
                 continue
             with src, open(long_path(target), 'wb') as out:
                 shutil.copyfileobj(src, out)
-    return True
+    return 'ok'
 
 
 def _extract_gz(archive_path, dest_dir, log, pm):
+    """返回 'ok'。"""
     out_name = os.path.basename(archive_path)[:-3] or 'gz解压文件'
     target = safe_target(dest_dir, out_name)
     os.makedirs(long_path(dest_dir), exist_ok=True)
     with gzip.open(archive_path, 'rb') as src, open(long_path(target), 'wb') as out:
         shutil.copyfileobj(src, out)
-    return True
+    return 'ok'
 
 
 # ---------- 统一入口 ----------
 
-def extract_archive(archive_path: str, dest_dir: str, log, pm) -> bool:
-    """把一个压缩包解压到 dest_dir。返回是否成功。pm 为密码管理器。"""
+def extract_archive(archive_path: str, dest_dir: str, log, pm) -> str:
+    """解压一个压缩包到 dest_dir。
+    返回 'ok' | 'skip_pw' | 'fail'。pm 为密码管理器。"""
     kind = archive_kind(os.path.basename(archive_path))
     name = os.path.basename(archive_path)
     try:
@@ -367,15 +373,15 @@ def extract_archive(archive_path: str, dest_dir: str, log, pm) -> bool:
         if kind in ('7z', '7z-vol'):
             if not HAS_7Z:
                 log(f'  [跳过] 未安装 py7zr,无法解压 7z: {name}')
-                return False
+                return 'fail'
             if kind == '7z-vol' and not HAS_MV:
                 log(f'  [跳过] 未安装 multivolumefile,无法解压 7z 分卷: {name}')
-                return False
+                return 'fail'
             return _extract_7z(archive_path, dest_dir, log, pm)
         if kind == 'rar':
             if not HAS_RAR:
                 log(f'  [跳过] 未安装 rarfile/unrar,无法解压 rar: {name}')
-                return False
+                return 'fail'
             return _extract_rar(archive_path, dest_dir, log, pm)
         if kind == 'tar':
             return _extract_tar(archive_path, dest_dir, log, pm)
@@ -383,27 +389,31 @@ def extract_archive(archive_path: str, dest_dir: str, log, pm) -> bool:
             return _extract_gz(archive_path, dest_dir, log, pm)
         if kind == 'volume-unsupported':
             log(f'  [跳过] 暂不支持 .zip.001 型分卷,请先用 7-Zip 合并: {name}')
-            return False
-        return False
+            return 'fail'
+        return 'fail'
     except Exception as e:
         log(f'  [错误] 解压失败 {name}: {e}')
-        return False
+        return 'fail'
 
 
 def extract_all_recursive(archive_path: str, dest_dir: str, log, pm,
-                          failures, depth=0, cancel=None):
-    """递归解压:一个压缩包里若还有压缩包,继续解压(最多 5 层防死循环)。
-    解压失败的压缩包(含嵌套)路径会追加到 failures 列表。返回顶层是否成功。"""
+                          failures, skip_pws, depth=0, cancel=None):
+    """递归解压(最多 5 层)。
+    解压失败追加到 failures,因密码未提供而跳过的追加到 skip_pws。
+    返回 'ok' | 'skip_pw' | 'fail'。"""
     if cancel is not None and cancel.is_set():
-        return False
+        return 'fail'
     if depth > 5:
         log(f'  [提示] 嵌套层数过深,停止: {os.path.basename(archive_path)}')
-        return False
-    ok = extract_archive(archive_path, dest_dir, log, pm)
-    if not ok:
+        return 'fail'
+    result = extract_archive(archive_path, dest_dir, log, pm)
+    if result == 'skip_pw':
+        skip_pws.append(archive_path)
+        return 'skip_pw'
+    if result != 'ok':
         failures.append(archive_path)
-        return False
-    # 先快照收集本层解压出的嵌套压缩包,再逐个递归(避免边遍历边写入)
+        return 'fail'
+    # 先快照收集本层解压出的嵌套压缩包,再逐个递归
     nested = []
     for root, _, files in os.walk(dest_dir):
         for f in files:
@@ -413,5 +423,5 @@ def extract_all_recursive(archive_path: str, dest_dir: str, log, pm,
     for n in nested:
         sub = n + '_解压'
         os.makedirs(long_path(sub), exist_ok=True)
-        extract_all_recursive(n, sub, log, pm, failures, depth + 1, cancel)
-    return True
+        extract_all_recursive(n, sub, log, pm, failures, skip_pws, depth + 1, cancel)
+    return 'ok'

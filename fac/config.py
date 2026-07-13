@@ -21,6 +21,7 @@ DEFAULTS = {
     'auto_pw_txt': True,
     'pw_file': '',
     'delete_ok': False,
+    'rules': [],                 # [{'rule_type':...,'value':...,'target':...,'enabled':...},...]
 }
 
 

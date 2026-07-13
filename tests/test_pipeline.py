@@ -51,15 +51,15 @@ def test_end_to_end_unit_subfolder(tmp_path):
     logs, result = run(opts)
     assert result['files'] == 5 and not result['cancelled']
     # 张三:姓名命中(公安局) + 证号命中(银行)归同一文件夹
-    assert (out / '张三' / '公安局反馈' / '张三_户籍.txt').exists()
-    assert (out / '张三' / '银行反馈' / f'{ID_A}_流水.txt').exists()
+    assert (out / f'张三_{ID_A}' / '公安局反馈' / '张三_户籍.txt').exists()
+    assert (out / f'张三_{ID_A}' / '银行反馈' / f'{ID_A}_流水.txt').exists()
     # 李四:曾用名命中
-    assert (out / '李四' / '银行反馈' / '李小四_流水.txt').exists()
+    assert (out / f'李四_{ID_B}' / '银行反馈' / '李小四_流水.txt').exists()
     assert (out / '未分类' / '公安局反馈' / '无关文件.txt').exists()
     # 反馈核对表已生成
     assert result['reports'] and any(r.endswith('.csv') for r in result['reports'])
     csv_text = open(result['reports'][0], encoding='utf-8-sig').read()
-    assert '公安局反馈' in csv_text and '银行反馈' in csv_text and '张三' in csv_text
+    assert '公安局反馈' in csv_text and '银行反馈' in csv_text and f'张三_{ID_A}' in csv_text
     # 日志文件已写入
     assert any(f.startswith('分类日志') for f in os.listdir(out))
     # 临时目录已清理
@@ -72,7 +72,7 @@ def test_unit_prefix_mode(tmp_path):
     opts = JobOptions([str(src)], str(out), Roster.from_text(ROSTER),
                       unit_mode='prefix')
     run(opts)
-    assert (out / '张三' / '【公安局反馈】张三_户籍.txt').exists()
+    assert (out / f'张三_{ID_A}' / '【公安局反馈】张三_户籍.txt').exists()
 
 
 def test_unit_none_mode(tmp_path):
@@ -81,7 +81,7 @@ def test_unit_none_mode(tmp_path):
     opts = JobOptions([str(src)], str(out), Roster.from_text(ROSTER),
                       unit_mode='none')
     run(opts)
-    assert (out / '张三' / '张三_户籍.txt').exists()
+    assert (out / f'张三_{ID_A}' / '张三_户籍.txt').exists()
 
 
 def test_auto_id_fallback(tmp_path):
@@ -148,7 +148,7 @@ def test_content_match_xlsx(tmp_path):
     opts = JobOptions([str(src)], str(out), Roster.from_text(ROSTER),
                       unit_mode='none', content_match=True)
     run(opts)
-    assert (out / '张三' / '回执001.xlsx').exists()
+    assert (out / f'张三_{ID_A}' / '回执001.xlsx').exists()
     assert not (out / '未分类').exists()
 
 
@@ -170,8 +170,8 @@ def test_split_excel(tmp_path):
     opts = JobOptions([str(src)], str(out), Roster.from_text(ROSTER),
                       unit_mode='none', content_match=True, split_excel=True)
     run(opts)
-    z_files = list((out / '张三').glob('*.xlsx'))
-    l_files = list((out / '李四').glob('*.xlsx'))
+    z_files = list((out / f'张三_{ID_A}').glob('*.xlsx'))
+    l_files = list((out / f'李四_{ID_B}').glob('*.xlsx'))
     assert len(z_files) == 1 and len(l_files) == 1
     # 张三的拆分文件应包含表头 + 2 行数据
     wb2 = openpyxl.load_workbook(z_files[0])
@@ -202,8 +202,8 @@ def test_copy_to_each(tmp_path):
     opts = JobOptions([str(src)], str(out), Roster.from_text(ROSTER),
                       unit_mode='none', copy_to_each=True)
     run(opts)
-    assert (out / '张三' / '张三与李四对比.txt').exists()
-    assert (out / '李四' / '张三与李四对比.txt').exists()
+    assert (out / f'张三_{ID_A}' / '张三与李四对比.txt').exists()
+    assert (out / f'李四_{ID_B}' / '张三与李四对比.txt').exists()
 
 
 def test_cancel_event(tmp_path):

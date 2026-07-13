@@ -46,15 +46,22 @@ class Roster:
         self._rebuild()
 
     def _rebuild(self):
-        # 同名人员用证号后 4 位区分文件夹,避免混档
-        names = {}
+        # 有身份证号的人员:文件夹名=姓名_完整证号,便于搜索和二次分类
         for p in self.persons:
-            names.setdefault(p.name, []).append(p)
-        for name, group in names.items():
-            if len(group) > 1:
-                for p in group:
-                    if p.ids:
-                        p.folder = safe_folder_name(f'{p.name}_{p.ids[0][-4:]}')
+            if p.ids:
+                p.folder = safe_folder_name(f'{p.name}_{p.ids[0]}')
+        # 同名且无身份证号的人员用序号区分,避免混档
+        name_counts = {}
+        for p in self.persons:
+            if not p.ids:
+                name_counts[p.name] = name_counts.get(p.name, 0) + 1
+        for name, cnt in name_counts.items():
+            if cnt > 1:
+                idx = 1
+                for p in self.persons:
+                    if p.name == name and not p.ids:
+                        p.folder = safe_folder_name(f'{name}_{idx}')
+                        idx += 1
         # 匹配索引:按关键字长度降序(最长匹配优先)
         self._index = []
         for p in self.persons:
