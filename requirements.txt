@@ -11,9 +11,8 @@ openpyxl        # Excel 名单导入 / 内容匹配 / 按人拆分 / xlsx 核对
 python-docx     # Word 内容匹配
 pdfplumber      # PDF 内容匹配
 
-# 界面增强(可选)
-ttkbootstrap    # 现代化主题
-tkinterdnd2     # 拖拽添加文件
+# 界面框架
+PySide6>=6.5    # Qt for Python — V3.0 核心依赖
 
 # 开发
 pytest          # 运行 tests/ 单元测试
