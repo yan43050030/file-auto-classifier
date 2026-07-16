@@ -39,7 +39,8 @@ class JobOptions:
                  preview=False,
                  content_match=False, split_excel=False, dedup=False,
                  auto_pw_txt=True, pw_files=None, delete_ok=False,
-                 rules=None, intelligent=True):
+                 rules=None, intelligent=True,
+                 intelligent_min_freq=10, intelligent_exclude=None):
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.roster = roster
@@ -55,6 +56,8 @@ class JobOptions:
         self.delete_ok = delete_ok
         self.rules = list(rules or [])    # 高级分类规则列表
         self.intelligent = intelligent
+        self.intelligent_min_freq = max(2, int(intelligent_min_freq or 10))
+        self.intelligent_exclude = list(intelligent_exclude or [])
 
 
 class PlanItem:
@@ -284,7 +287,10 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         # ---- 3.5 智能识别 ----
         imatch = None
         if opts.intelligent:
-            detected = detect_names(all_files, min_freq=10, log=tee)
+            detected = detect_names(all_files,
+                                    min_freq=opts.intelligent_min_freq,
+                                    exclude=opts.intelligent_exclude,
+                                    log=tee)
             # 已知姓名 = 名单中的姓名/曾用名 + 智能发现的高频候选姓名
             known_names = set()
             for p in opts.roster.persons:

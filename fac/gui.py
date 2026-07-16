@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 import sys
 import datetime
 import threading
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
     QComboBox, QCheckBox, QRadioButton, QButtonGroup, QFileDialog,
     QMessageBox, QInputDialog, QSplitter, QFrame, QSizePolicy, QMenu,
     QScrollArea, QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem,
-    QHeaderView,
+    QHeaderView, QSpinBox,
 )
 
 from . import VERSION, APP_NAME
@@ -321,7 +322,7 @@ class MainWindow(QMainWindow):
             ('content_match', '内容匹配:读 Excel/Word/PDF/文本查人', False),
             ('split_excel', 'Excel 按人拆分:多人表按行拆每人一份(原表保留)', False),
             ('dedup', '内容去重:同文件夹内文件只留一份', False),
-            ('intelligent', '智能识别:10+文件中发现人名,推测姓名↔证号', True),
+            ('intelligent', '智能识别:自动发现人名(排除机构/地名/职务),推测姓名↔证号', True),
             ('auto_pw_txt', '自动把 .txt 当密码本', True),
             ('delete_ok', '⚠ 成功后删除压缩包(移入回收站)', False),
         ]
@@ -329,6 +330,19 @@ class MainWindow(QMainWindow):
             cb = QCheckBox(label); cb.setChecked(default); self._ck[key] = cb
             grid.addWidget(cb, idx // 2, idx % 2)
         al.addLayout(grid)
+
+        ir = QHBoxLayout(); ir.setSpacing(6)
+        ir.addWidget(QLabel('智能识别:同一姓名出现于'))
+        self.spin_minfreq = QSpinBox()
+        self.spin_minfreq.setRange(2, 999)
+        self.spin_minfreq.setValue(10)
+        self.spin_minfreq.setFixedWidth(64)
+        ir.addWidget(self.spin_minfreq)
+        ir.addWidget(QLabel('个以上文件才算人名;额外排除词:'))
+        self.txt_iexclude = QLineEdit()
+        self.txt_iexclude.setPlaceholderText('逗号分隔,如:某某专案,某某工程(常见机构/地名已内置排除)')
+        ir.addWidget(self.txt_iexclude, 1)
+        al.addLayout(ir)
         al.addWidget(self._sep())
 
         al.addWidget(QLabel('高级分类规则(名单/智能未命中时按规则从上到下依次匹配):'))
@@ -575,6 +589,8 @@ class MainWindow(QMainWindow):
             'unit_mode': ['subfolder', 'prefix', 'none'][self._rg_unit.checkedId()],
             'pw_file': self.txt_pwfile.text().strip(),
             'rules': [r.to_dict() for r in self._get_rules()],
+            'intelligent_min_freq': self.spin_minfreq.value(),
+            'intelligent_exclude': self.txt_iexclude.text().strip(),
         }
         for ck_key, cb in self._ck.items():
             cfg[ck_key] = cb.isChecked()
@@ -593,6 +609,8 @@ class MainWindow(QMainWindow):
             self._rg_unit.button(1).setChecked(um == 'prefix')
             self._rg_unit.button(2).setChecked(um == 'none')
             self.txt_pwfile.setText(cfg.get('pw_file', ''))
+            self.spin_minfreq.setValue(int(cfg.get('intelligent_min_freq', 10)))
+            self.txt_iexclude.setText(str(cfg.get('intelligent_exclude', '')))
             # 所有 checkbox 统一迭代设置
             for ck_key, cb in self._ck.items():
                 cb.setChecked(bool(cfg.get(ck_key, cb.isChecked())))
@@ -736,6 +754,9 @@ class MainWindow(QMainWindow):
             unit_mode=['subfolder','prefix','none'][self._rg_unit.checkedId()],
             pw_files=pw_files,
             rules=self._get_rules(),
+            intelligent_min_freq=self.spin_minfreq.value(),
+            intelligent_exclude=[t for t in re.split(
+                r'[,，;；\s]+', self.txt_iexclude.text()) if t.strip()],
             **{k: cb.isChecked() for k, cb in self._ck.items()})
 
         self.btn_run.setEnabled(False)

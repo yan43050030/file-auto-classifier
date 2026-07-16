@@ -23,6 +23,8 @@ DEFAULTS = {
     'delete_ok': False,
     'rules': [],                 # [{'rule_type':...,'value':...,'target':...,'enabled':...},...]
     'intelligent': True,         # 智能识别高频人名 + 姓名-证号关联
+    'intelligent_min_freq': 10,  # 同一姓名至少出现在多少个文件中才算候选人名
+    'intelligent_exclude': '',   # 用户自定义排除词(逗号分隔,如项目名/专案名)
 }
 
 
