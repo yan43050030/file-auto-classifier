@@ -8,8 +8,10 @@ send2trash      # 删除原包时移入回收站
 openpyxl        # Excel 名单导入 / 内容匹配 / 按人拆分 / xlsx 核对表
 
 # 内容匹配扩展(可选)
-python-docx     # Word 内容匹配
+python-docx     # Word(.docx)内容匹配
 pdfplumber      # PDF 内容匹配
+xlrd            # 旧版 Excel(.xls)内容匹配
+olefile         # 旧版 Word(.doc)内容提取(缺失时自动退回字节扫描)
 
 # 界面框架
 PySide6>=6.5    # Qt for Python — V3.0 核心依赖

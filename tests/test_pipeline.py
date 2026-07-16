@@ -182,6 +182,58 @@ def test_split_excel(tmp_path):
     assert list((out / '原始反馈').rglob('开户情况.xlsx'))
 
 
+def test_content_match_doc_legacy(tmp_path):
+    # 文件名无信息的旧版 .doc,靠内容里的姓名归档
+    src = tmp_path / 'in'
+    src.mkdir()
+    payload = b'\x00junk' + '张三户籍情况'.encode('utf-16-le') + b'\x00'
+    with zipfile.ZipFile(src / '某单位.zip', 'w') as z:
+        z.writestr('回执007.doc', payload)
+    out = tmp_path / 'out'
+    opts = JobOptions([str(src)], str(out), Roster.from_text(ROSTER),
+                      unit_mode='none', content_match=True)
+    run(opts)
+    assert (out / f'张三_{ID_A}' / '回执007.doc').exists()
+
+
+def test_content_id_fallback(tmp_path):
+    # 文件名无信息、人也不在名单,靠内容里的身份证号归档
+    src = tmp_path / 'in'
+    src.mkdir()
+    with zipfile.ZipFile(src / 'u.zip', 'w') as z:
+        z.writestr('data001.txt', f'查询对象证件号 {ID_B} 无违法记录')
+    out = tmp_path / 'out'
+    opts = JobOptions([str(src)], str(out), Roster.from_text('张三\n'),
+                      unit_mode='none', content_match=True, auto_id=True)
+    _logs, result = run(opts)
+    assert (out / ID_B / 'data001.txt').exists()
+
+
+def test_preview_manual_reassign(tmp_path):
+    # 预览确认回调中修改 targets(模拟界面手改),执行结果应跟随新目标
+    src = tmp_path / 'in'
+    src.mkdir()
+    with zipfile.ZipFile(src / 'u.zip', 'w') as z:
+        z.writestr('无关文件.txt', 'x')
+    out = tmp_path / 'out'
+    opts = JobOptions([str(src)], str(out), Roster.from_text(ROSTER),
+                      unit_mode='none', preview=True)
+
+    def confirm(plan):
+        for item in plan:
+            if item.targets == ['未分类']:
+                item.targets = [f'张三_{ID_A}']   # 人工改归张三
+                item.via += '·手改'
+        return True
+
+    logs, result = [], {}
+    run_job(opts, log=logs.append, progress=lambda *a: None,
+            ask_password=lambda n, a: None,
+            confirm_cb=confirm, done_cb=result.update)
+    assert (out / f'张三_{ID_A}' / '无关文件.txt').exists()
+    assert not (out / '未分类').exists()
+
+
 def test_failed_archive_stashed(tmp_path):
     src = tmp_path / 'in'
     src.mkdir()

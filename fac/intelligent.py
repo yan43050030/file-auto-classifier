@@ -302,3 +302,28 @@ class IntelligentMatcher:
                 return safe_folder_name(t), '智能(候选姓名)'
 
         return None
+
+    def match_content(self, text: str):
+        """在文件内容文本中查找智能识别掌握的姓名/证号(文件名无信息时的兜底)。
+        返回 (folder_name, via) 或 None。"""
+        if not text:
+            return None
+        # 证号优先:内容中出现已建立映射的身份证号
+        for m in find_ids(text):
+            i = m.strip().upper()
+            if valid_id15(i):
+                i = id15_to_18(i)
+            name = self.id_to_name.get(i)
+            if name:
+                mid = self.name_to_id.get(name, i)
+                return safe_folder_name(f'{name}_{mid}'), '智能(内容证号)'
+        # 已知姓名(映射 + 高频候选),最长优先,避免"张三"抢了"张三丰"
+        known = sorted(set(self.name_to_id) | self.detected_names,
+                       key=len, reverse=True)
+        for n in known:
+            if n in text:
+                mid = self.name_to_id.get(n)
+                if mid:
+                    return safe_folder_name(f'{n}_{mid}'), '智能(内容姓名)'
+                return safe_folder_name(n), '智能(内容姓名)'
+        return None
