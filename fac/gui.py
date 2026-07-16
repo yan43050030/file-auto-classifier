@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import VERSION, APP_NAME
-from .util import resource_path
+from .util import resource_path, safe_folder_name
 from .roster import Roster
 from .pipeline import JobOptions, run_job
 from .rules import Rule
@@ -679,19 +679,54 @@ class MainWindow(QMainWindow):
         def _show():
             dlg = QDialog(self)
             dlg.setWindowTitle(f'预览归档计划(共 {len(plan)} 个文件)')
-            dlg.resize(820, 480)
+            dlg.resize(860, 520)
             lay = QVBoxLayout(dlg)
+            tip = QLabel('双击"归入文件夹"一格可直接改;选中多行(Ctrl/Shift)后'
+                         '点"改归到…"可批量改。改动只影响本次归档。')
+            tip.setStyleSheet(f'color:{TEXT_SEC};')
+            lay.addWidget(tip)
             tree = QTreeWidget()
             tree.setHeaderLabels(['文件名', '来源单位', '归入文件夹', '命中方式'])
             tree.setAlternatingRowColors(True)
             tree.setRootIsDecorated(False)
+            tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+            tree.setEditTriggers(QTreeWidget.NoEditTriggers)
+            rows = []       # (QTreeWidgetItem, PlanItem)
             for item in plan:
-                QTreeWidgetItem(tree, [item.fname, item.unit,
-                                       item.display_target(), item.via])
-            for i, w in enumerate([300, 140, 200, 80]):
+                it = QTreeWidgetItem(tree, [item.fname, item.unit,
+                                            item.display_target(), item.via])
+                if item.action == 'place':      # 拆分行不支持手改
+                    it.setFlags(it.flags() | Qt.ItemIsEditable)
+                rows.append((it, item))
+            for i, w in enumerate([300, 140, 220, 90]):
                 tree.header().resizeSection(i, w)
+
+            def _dbl(it, col):
+                if col == 2 and (it.flags() & Qt.ItemIsEditable):
+                    tree.editItem(it, 2)
+            tree.itemDoubleClicked.connect(_dbl)
             lay.addWidget(tree)
+
             btn_box = QDialogButtonBox()
+            btn_re = btn_box.addButton('改归到…', QDialogButtonBox.ActionRole)
+
+            def _reassign():
+                sel = [s for s in tree.selectedItems()
+                       if s.flags() & Qt.ItemIsEditable]
+                if not sel:
+                    QMessageBox.information(dlg, '提示',
+                                            '请先选中要改的行(拆分行不可改)。')
+                    return
+                folders = sorted({t for _it, pi in rows
+                                  for t in pi.targets} | {'未分类'})
+                choice, ok = QInputDialog.getItem(
+                    dlg, '改归到', '目标文件夹(可直接输入新名称):',
+                    folders, 0, True)
+                if ok and choice.strip():
+                    for s in sel:
+                        s.setText(2, choice.strip())
+            btn_re.clicked.connect(_reassign)
+
             btn_ok = btn_box.addButton('确认执行', QDialogButtonBox.AcceptRole)
             btn_no = btn_box.addButton('取消', QDialogButtonBox.RejectRole)
             n_un = sum(1 for i in plan if i.targets == ['未分类'])
@@ -703,6 +738,19 @@ class MainWindow(QMainWindow):
             lay.addWidget(btn_box)
             dlg._ok = False
             dlg.exec()
+            # 确认后把界面上的修改写回归档计划
+            if dlg._ok:
+                for it, pi in rows:
+                    if pi.action != 'place':
+                        continue
+                    txt = it.text(2).strip()
+                    if txt and txt != pi.display_target():
+                        new_targets = [safe_folder_name(t.strip())
+                                       for t in re.split(r'[、,，;；]', txt)
+                                       if t.strip()]
+                        if new_targets:
+                            pi.targets = new_targets
+                            pi.via += '·手改'
             result[0] = dlg._ok
             loop.quit()
 

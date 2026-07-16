@@ -272,7 +272,8 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         for fp, unit in loose_files:
             all_files.append((fp, os.path.basename(fp), unit))
 
-        use_content = opts.content_match and len(opts.roster) > 0
+        # 内容匹配对"名单 + 智能识别 + 证号兜底"都有用,不再要求名单非空
+        use_content = opts.content_match
         use_split = opts.split_excel
         if use_content or use_split:
             from .content_match import extract_text, HAS_XLSX
@@ -307,10 +308,19 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         for i, (fp, fname, unit) in enumerate(all_files, 1):
             ck()
             progress('classify', i, len(all_files))
+
+            # 每个文件的内容文本只提取一次,各级匹配复用
+            _text_cache = []
+
+            def get_text():
+                if not _text_cache:
+                    _text_cache.append(extract_text(fp) if use_content else '')
+                return _text_cache[0]
+
             persons = opts.roster.match(fname)
             via = '文件名'
-            if not persons and use_content:
-                text = extract_text(fp)
+            if not persons and use_content and len(opts.roster) > 0:
+                text = get_text()
                 if text:
                     persons = opts.roster.match(text)
                     via = '内容'
@@ -327,9 +337,11 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                                      [p.folder for p in persons],
                                      persons, via))
                 continue
-            # 智能识别:name↔ID 映射
+            # 智能识别:name↔ID 映射(先按文件名,再按内容兜底)
             if imatch is not None:
                 m = imatch.match(fname)
+                if m is None and use_content:
+                    m = imatch.match_content(get_text())
                 if m:
                     folder, sm_via = m
                     plan.append(PlanItem(fp, fname, unit, 'place',
@@ -349,6 +361,14 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                                          [safe_folder_name(ids[0])],
                                          via='身份证号'))
                     continue
+                # 文件名没有证号 → 内容里找(如"回执001.pdf"正文含证号)
+                if use_content:
+                    ids = find_ids(get_text())
+                    if ids:
+                        plan.append(PlanItem(fp, fname, unit, 'place',
+                                             [safe_folder_name(ids[0])],
+                                             via='内容证号'))
+                        continue
             plan.append(PlanItem(fp, fname, unit, 'place', ['未分类'],
                                  via='未分类'))
 
