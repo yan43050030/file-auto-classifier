@@ -50,6 +50,12 @@ def build_parser():
                    help='不自动把输入文件夹里的 txt 当密码本')
     p.add_argument('--delete-ok', action='store_true',
                    help='完成后删除已成功解压的原始压缩包(移入回收站)')
+    p.add_argument('--no-smart', action='store_true',
+                   help='关闭智能识别(自动发现高频人名 + 姓名↔证号推测)')
+    p.add_argument('--smart-min-freq', type=int, default=10, metavar='N',
+                   help='智能识别阈值:同一姓名至少出现在 N 个文件中(默认 10)')
+    p.add_argument('--smart-exclude', action='append', default=[], metavar='词',
+                   help='智能识别额外排除词(可重复;常见机构/地名/职务已内置排除)')
     p.add_argument('-V', '--version', action='version',
                    version=f'{APP_NAME} {VERSION}')
     return p
@@ -99,7 +105,10 @@ def main(argv=None):
         content_match=args.content_match, split_excel=args.split_excel,
         dedup=args.dedup,
         auto_pw_txt=not args.no_auto_pw_txt, pw_files=args.pw_file,
-        delete_ok=args.delete_ok)
+        delete_ok=args.delete_ok,
+        intelligent=not args.no_smart,
+        intelligent_min_freq=args.smart_min_freq,
+        intelligent_exclude=args.smart_exclude)
 
     result = {}
 
