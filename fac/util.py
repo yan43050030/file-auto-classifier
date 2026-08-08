@@ -32,6 +32,13 @@ def safe_folder_name(name: str) -> str:
     return name.strip(' .') or '未命名'
 
 
+def safe_rel_path(rel: str) -> str:
+    """把"文档/2023"这类相对路径逐段变成合法文件夹名(分隔符保留)。"""
+    parts = [safe_folder_name(p) for p in str(rel).replace('\\', '/').split('/')
+             if p.strip()]
+    return os.path.join(*parts) if parts else '未命名'
+
+
 def unique_path(dst_folder: str, filename: str) -> str:
     """避免同名覆盖:若已存在则加 (1)(2)…"""
     base, ext = os.path.splitext(filename)
