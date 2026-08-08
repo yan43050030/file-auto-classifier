@@ -25,9 +25,11 @@ from PySide6.QtWidgets import (
 )
 
 from . import VERSION, APP_NAME
-from .util import resource_path, safe_folder_name
+from .util import resource_path, safe_rel_path
 from .roster import Roster
 from .pipeline import JobOptions, run_job
+from .organize import OrganizeOptions, run_organize, LAYOUT_PRESETS
+from . import undo as undo_mod
 from .rules import Rule
 from . import config as conf
 from . import extract as ex
@@ -248,8 +250,16 @@ class MainWindow(QMainWindow):
         return gb
 
     def _build_output_card(self):
-        gb = QGroupBox('②  保存到')
+        gb = QGroupBox('②  保存到 / 工作模式')
         lay = QVBoxLayout(gb); lay.setSpacing(8)
+        mr = QHBoxLayout(); mr.setSpacing(6)
+        mr.addWidget(QLabel('工作模式:'))
+        self.cmb_mode = QComboBox()
+        self.cmb_mode.addItem('按人归档(查询反馈 / 办案材料)', 'person')
+        self.cmb_mode.addItem('文件整理(下载目录 / 移动硬盘)', 'organize')
+        self.cmb_mode.currentIndexChanged.connect(self._on_mode_changed)
+        mr.addWidget(self.cmb_mode, 1)
+        lay.addLayout(mr)
         r = QHBoxLayout(); r.setSpacing(6)
         self.txt_out = QLineEdit()
         self.txt_out.setPlaceholderText('自动填入,可手动改...')
@@ -371,6 +381,73 @@ class MainWindow(QMainWindow):
         pwf.addWidget(b)
         al.addLayout(pwf)
         tabs.addTab(ta, '🔧 高级功能')
+
+        # ── 文件整理 tab ──
+        tg = QWidget()
+        gl = QVBoxLayout(tg); gl.setSpacing(8); gl.setContentsMargins(16, 12, 16, 12)
+        hint = QLabel('把下载目录/移动硬盘里积攒的杂乱文件按类型+时间整理好,'
+                      '同时挑出重复、旧版本和垃圾文件。\n'
+                      '全过程记入台账,随时可一键撤销还原。')
+        hint.setStyleSheet(f'color:{TEXT_SEC};')
+        hint.setWordWrap(True)
+        gl.addWidget(hint)
+
+        lr = QHBoxLayout(); lr.setSpacing(6)
+        lr.addWidget(QLabel('目录布局:'))
+        self.cmb_layout = QComboBox()
+        self.cmb_layout.setEditable(True)
+        for tpl, desc in LAYOUT_PRESETS:
+            self.cmb_layout.addItem(f'{tpl}      — {desc}', tpl)
+        self.cmb_layout.setCurrentIndex(1)
+        lr.addWidget(self.cmb_layout, 1)
+        gl.addLayout(lr)
+        ph = QLabel('可用占位符: {类别} {年} {年月} {来源} {扩展名}(可直接编辑组合)')
+        ph.setStyleSheet(f'color:{TEXT_SEC}; font-size:11px;')
+        gl.addWidget(ph)
+        gl.addWidget(self._sep())
+
+        opr = QHBoxLayout(); opr.setSpacing(12)
+        opr.addWidget(QLabel('处理方式:'))
+        self._rg_op = QButtonGroup(self)
+        rb_mv = QRadioButton('移动(推荐:整理硬盘不占额外空间)'); rb_mv.setChecked(True)
+        self._rg_op.addButton(rb_mv, 0); opr.addWidget(rb_mv)
+        rb_cp = QRadioButton('复制(保留原件,需双倍空间)')
+        self._rg_op.addButton(rb_cp, 1); opr.addWidget(rb_cp)
+        opr.addStretch()
+        gl.addLayout(opr)
+
+        self._ckg = {}
+        ggrid = QGridLayout(); ggrid.setSpacing(8)
+        g_specs = [
+            ('org_dup', '挑出重复文件(内容相同的只留一份,其余归入「重复文件」)', True),
+            ('org_versions', '挑出旧版本(报告(1)/副本/最终版,旧的归入「旧版本」)', True),
+            ('org_junk', '挑出垃圾文件(Thumbs.db/临时文件/未完成下载/空文件)', True),
+            ('org_empty', '整理后清理空文件夹', True),
+            ('org_large', '把大文件单独归入「大文件」文件夹', False),
+            ('org_preview', '试运行预览:先看清单并可手改,确认后再执行', True),
+        ]
+        for idx, (key, label, default) in enumerate(g_specs):
+            cb = QCheckBox(label); cb.setChecked(default); self._ckg[key] = cb
+            ggrid.addWidget(cb, idx // 2, idx % 2)
+        gl.addLayout(ggrid)
+
+        sr = QHBoxLayout(); sr.setSpacing(6)
+        sr.addWidget(QLabel('大文件阈值:'))
+        self.spin_large = QSpinBox()
+        self.spin_large.setRange(1, 100000)
+        self.spin_large.setValue(100)
+        self.spin_large.setSuffix(' MB')
+        self.spin_large.setFixedWidth(110)
+        sr.addWidget(self.spin_large)
+        sr.addStretch()
+        self.btn_undo = QPushButton('↩ 撤销上次整理')
+        self.btn_undo.setFixedHeight(30)
+        self.btn_undo.clicked.connect(self._undo_last)
+        sr.addWidget(self.btn_undo)
+        gl.addLayout(sr)
+        gl.addStretch()
+        tabs.addTab(tg, '📁 文件整理')
+        self._tabs = tabs
 
         lay.addWidget(tabs)
         return gb
@@ -591,7 +668,13 @@ class MainWindow(QMainWindow):
             'rules': [r.to_dict() for r in self._get_rules()],
             'intelligent_min_freq': self.spin_minfreq.value(),
             'intelligent_exclude': self.txt_iexclude.text().strip(),
+            'work_mode': self._mode(),
+            'org_layout': self.cmb_layout.currentText().split('—')[0].strip(),
+            'org_op_mode': 'copy' if self._rg_op.checkedId() == 1 else 'move',
+            'org_large_mb': self.spin_large.value(),
         }
+        for k, cb in self._ckg.items():
+            cfg[k] = cb.isChecked()
         for ck_key, cb in self._ck.items():
             cfg[ck_key] = cb.isChecked()
         return cfg
@@ -611,6 +694,21 @@ class MainWindow(QMainWindow):
             self.txt_pwfile.setText(cfg.get('pw_file', ''))
             self.spin_minfreq.setValue(int(cfg.get('intelligent_min_freq', 10)))
             self.txt_iexclude.setText(str(cfg.get('intelligent_exclude', '')))
+            mode = cfg.get('work_mode', 'person')
+            self.cmb_mode.setCurrentIndex(1 if mode == 'organize' else 0)
+            lay_txt = cfg.get('org_layout', '')
+            if lay_txt:
+                idx = self.cmb_layout.findData(lay_txt)
+                if idx >= 0:
+                    self.cmb_layout.setCurrentIndex(idx)
+                else:
+                    self.cmb_layout.setEditText(lay_txt)
+            self._rg_op.button(1 if cfg.get('org_op_mode') == 'copy'
+                               else 0).setChecked(True)
+            self.spin_large.setValue(int(cfg.get('org_large_mb', 100)))
+            for k, cb in self._ckg.items():
+                cb.setChecked(bool(cfg.get(k, cb.isChecked())))
+            self._on_mode_changed()
             # 所有 checkbox 统一迭代设置
             for ck_key, cb in self._ck.items():
                 cb.setChecked(bool(cfg.get(ck_key, cb.isChecked())))
@@ -636,6 +734,7 @@ class MainWindow(QMainWindow):
         sb.setValue(sb.maximum())
 
     _PHASES = {'extract': ('解压', 0, 0.5), 'classify': ('匹配', 0.5, 0.2),
+               'scan': ('扫描', 0.0, 0.15), 'health': ('体检', 0.15, 0.45),
                'place': ('归档', 0.7, 0.3)}
 
     def _on_progress(self, phase, cur, total):
@@ -745,7 +844,7 @@ class MainWindow(QMainWindow):
                         continue
                     txt = it.text(2).strip()
                     if txt and txt != pi.display_target():
-                        new_targets = [safe_folder_name(t.strip())
+                        new_targets = [safe_rel_path(t.strip())
                                        for t in re.split(r'[、,，;；]', txt)
                                        if t.strip()]
                         if new_targets:
@@ -766,6 +865,125 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.setText('正在取消...')
 
+    # ---------- 工作模式 ----------
+
+    def _mode(self):
+        return self.cmb_mode.currentData() or 'person'
+
+    def _on_mode_changed(self, _idx=0):
+        organize = (self._mode() == 'organize')
+        self.btn_run.setText('▶  开始整理' if organize else '▶  开始分类')
+        # 切到对应设置页,避免用户改错地方
+        try:
+            if organize:
+                self._tabs.setCurrentIndex(self._tabs.count() - 1)
+            else:
+                self._tabs.setCurrentIndex(0)
+        except Exception:
+            pass
+
+    def _organize_opts(self, out):
+        layout = (self.cmb_layout.currentData()
+                  if self.cmb_layout.currentIndex() >= 0 and
+                  '—' in self.cmb_layout.currentText() else None)
+        if not layout:
+            # 用户手动编辑过:取输入框里 — 之前的部分
+            layout = self.cmb_layout.currentText().split('—')[0].strip()
+        return OrganizeOptions(
+            inputs=list(self.inputs), out_dir=out,
+            layout=layout or '{类别}/{年}',
+            op_mode='copy' if self._rg_op.checkedId() == 1 else 'move',
+            preview=self._ckg['org_preview'].isChecked(),
+            rules=self._get_rules(),
+            find_dup=self._ckg['org_dup'].isChecked(),
+            find_versions=self._ckg['org_versions'].isChecked(),
+            find_junk=self._ckg['org_junk'].isChecked(),
+            separate_large=self._ckg['org_large'].isChecked(),
+            large_threshold=self.spin_large.value() * 1024 * 1024,
+            clean_empty_dirs=self._ckg['org_empty'].isChecked())
+
+    def _start_organize(self, out):
+        opts = self._organize_opts(out)
+        if opts.op_mode == 'move':
+            r = QMessageBox.question(
+                self, '确认整理',
+                f'将把所选位置的文件【移动】到:\n{out}\n\n'
+                f'目录布局: {opts.layout}\n\n'
+                f'全过程会记入撤销台账,整理后可随时点「撤销上次整理」还原。\n'
+                f'确定继续吗?',
+                QMessageBox.Yes | QMessageBox.No)
+            if r != QMessageBox.Yes:
+                return
+        conf.save_config(self._gather_cfg())
+        self._begin_job()
+
+        def done(summary):
+            self._ui_call(lambda: self._on_done(summary))
+
+        threading.Thread(
+            target=run_organize,
+            args=(opts, self._log, self._on_progress,
+                  self._confirm_plan, self._cancel, done),
+            daemon=True).start()
+
+    def _undo_last(self):
+        out = self.txt_out.text().strip()
+        if not out or not os.path.isdir(out):
+            QMessageBox.warning(self, '提示', '请先选择整理结果所在的目录。')
+            return
+        journals = undo_mod.find_journals(out)
+        if not journals:
+            QMessageBox.information(
+                self, '提示',
+                f'该目录里没有找到整理台账(整理台账_*.jsonl):\n{out}')
+            return
+        names = [os.path.basename(j) for j in journals]
+        pick, ok = QInputDialog.getItem(
+            self, '撤销整理', '选择要撤销的那次整理(最新的在最前):',
+            names, 0, False)
+        if not ok:
+            return
+        journal = journals[names.index(pick)]
+        meta, ops = undo_mod.read_journal(journal)
+        r = QMessageBox.question(
+            self, '确认撤销',
+            f'将按台账把 {len(ops)} 项操作全部还原:\n{pick}\n'
+            f'整理时间: {meta.get("time", "?")}   方式: {meta.get("op_mode", "?")}\n\n'
+            f'文件会被移回整理前的原始位置。确定吗?',
+            QMessageBox.Yes | QMessageBox.No)
+        if r != QMessageBox.Yes:
+            return
+        self._begin_job()
+
+        def work():
+            stats = undo_mod.undo(journal, log=self._log, cancel=self._cancel)
+            self._ui_call(lambda: self._on_undo_done(stats))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_undo_done(self, stats):
+        self.btn_run.setEnabled(True)
+        self._on_mode_changed()
+        self.btn_cancel.setEnabled(False)
+        self.progress.setVisible(False)
+        self.lbl_prog.setVisible(False)
+        QMessageBox.information(
+            self, '撤销完成',
+            f'已还原 {stats.get("restored", 0)} 项,'
+            f'删除副本 {stats.get("removed", 0)} 个。\n'
+            f'找不到 {stats.get("missing", 0)} 个,失败 {stats.get("failed", 0)} 个。')
+
+    def _begin_job(self):
+        self.btn_run.setEnabled(False)
+        self.btn_run.setText('处理中...')
+        self.btn_cancel.setEnabled(True)
+        self.btn_cancel.setText('取消')
+        self.progress.setValue(0)
+        self.progress.setVisible(True)
+        self.lbl_prog.setVisible(True)
+        self.log.clear()
+        self._cancel.clear()
+
     def _start(self):
         if not self.inputs:
             QMessageBox.warning(self, '提示', '请先添加压缩包/文件夹/文件。')
@@ -775,6 +993,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, '提示', '请先选择输出目录。')
             return
         os.makedirs(out, exist_ok=True)
+
+        if self._mode() == 'organize':
+            self._start_organize(out)
+            return
+
         roster = Roster.from_text(self.txt_roster.toPlainText())
         if len(roster) == 0 and not self._ck['auto_id'].isChecked():
             QMessageBox.warning(self, '提示', '请至少输入名单,或勾选"自动识别身份证号"。')
@@ -807,15 +1030,7 @@ class MainWindow(QMainWindow):
                 r'[,，;；\s]+', self.txt_iexclude.text()) if t.strip()],
             **{k: cb.isChecked() for k, cb in self._ck.items()})
 
-        self.btn_run.setEnabled(False)
-        self.btn_run.setText('处理中...')
-        self.btn_cancel.setEnabled(True)
-        self.btn_cancel.setText('取消')
-        self.progress.setValue(0)
-        self.progress.setVisible(True)
-        self.lbl_prog.setVisible(True)
-        self.log.clear()
-        self._cancel.clear()
+        self._begin_job()
 
         summary = {}
 
@@ -832,12 +1047,15 @@ class MainWindow(QMainWindow):
 
     def _on_done(self, summary):
         self.btn_run.setEnabled(True)
-        self.btn_run.setText('▶  开始分类')
+        self._on_mode_changed()
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.setText('取消')
         self.progress.setValue(0 if summary.get('cancelled') else 100)
         self.lbl_prog.setText('已取消' if summary.get('cancelled') else '完成')
         if summary.get('cancelled'):
+            return
+        if summary.get('journal'):
+            self._on_organize_done(summary)
             return
         msg = f'分类完成!共处理 {summary.get("files", 0)} 个文件。'
         if summary.get('skipped_pw'):
@@ -847,6 +1065,28 @@ class MainWindow(QMainWindow):
         if summary.get('reports'):
             msg += '\n已生成反馈核对表。'
         QMessageBox.information(self, '完成', msg)
+
+    def _on_organize_done(self, summary):
+        from .health import human_size
+        hs = summary.get('health', {})
+        lines = [f'整理完成!共处理 {summary.get("files", 0)} 个文件。']
+        if hs.get('dup_extra'):
+            lines.append(f'· 重复文件 {hs["dup_extra"]} 个 → 「重复文件」,'
+                         f'确认后删除可省出 {human_size(hs.get("dup_bytes", 0))}')
+        if hs.get('junk'):
+            lines.append(f'· 垃圾/临时文件 {hs["junk"]} 个 → 「可清理」,'
+                         f'占用 {human_size(hs.get("junk_bytes", 0))}')
+        if hs.get('old_versions'):
+            lines.append(f'· 旧版本 {hs["old_versions"]} 个 → 「旧版本」')
+        if summary.get('empty_dirs'):
+            lines.append(f'· 清理空文件夹 {summary["empty_dirs"]} 个')
+        if summary.get('failed'):
+            lines.append(f'· 失败 {summary["failed"]} 个(见日志)')
+        if summary.get('reports'):
+            lines.append('· 已生成整理报告(类型/年份/占用/最大文件)')
+        lines.append('\n如果结果不满意,点「文件整理」页的'
+                     '「撤销上次整理」即可全部还原。')
+        QMessageBox.information(self, '完成', '\n'.join(lines))
 
     def _ui_call(self, fn):
         from PySide6.QtCore import QTimer

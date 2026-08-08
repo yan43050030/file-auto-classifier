@@ -1,6 +1,9 @@
 # 文件自动分类工具 (File Auto Classifier)
 
-一个带图形界面的 Windows 小工具:**自动解压压缩包(支持多级嵌套、分卷、AES 加密),再按人员名单(姓名 / 身份证号 / 曾用名任一命中)把文件按人归档,并生成"人员 × 来源单位"反馈核对表。**
+一个带图形界面的 Windows 小工具,两种工作模式:
+
+- **按人归档**:自动解压压缩包(支持多级嵌套、分卷、AES 加密),再按人员名单(姓名 / 身份证号 / 曾用名任一命中)把文件按人归档,并生成"人员 × 来源单位"反馈核对表。
+- **文件整理**:把下载目录、移动硬盘里积攒多年的杂乱文件按**类型 + 时间**整理好,同时挑出**重复文件、旧版本、垃圾文件**,给出整理报告。全过程记入台账,**可一键撤销**。
 
 典型场景:向多个单位查询多名人员的信息,各单位以压缩包反馈;本工具一键把所有反馈按"一人一个文件夹"归档,同时标注每份材料来自哪个单位,并列出哪些单位对哪些人还没有反馈。
 
@@ -23,21 +26,40 @@
 - **Excel 按人拆分(可选)**:一个表里有多个人的行时,按行拆成每人一份,原表保留在"原始反馈"。
 - **内容去重(可选)**:同一人员文件夹内,多个单位反馈的相同文件只留一份。
 
+### 文件整理(V4.0 新增)
+- **按用途分类**:文档 / 表格 / 演示 / PDF / 图片 / 视频 / 音频 / 压缩包 / 安装程序 / 电子书 / 代码 / 设计源文件 / 字体… 按"怎么用"而非扩展名归类。
+- **目录布局可选**:`{类别}/{年}`、`{年}/{类别}`、`{类别}/{年月}`、`{来源}/{类别}`,也可自由组合占位符。
+- **来源识别**:微信文件、QQ文件、截图、相机照片、未完成下载,靠命名特征自动认出。
+- **重复文件**:内容相同的只留一份(优先留非副本、时间早的原件),其余归入「重复文件」并算出可省空间;大文件先比前 64KB 预筛,不做全盘读取。
+- **旧版本归并**:`报告(1)`、`报告 - 副本`、`方案-最终版2`、`方案_v2` 识别为同一版本族,最新的留在原分类,旧的归入「旧版本」(裸数字结尾如"会议纪要2"不会误判)。
+- **垃圾清理**:Thumbs.db / .DS_Store / `~$` 临时文件 / 未完成下载 / 空文件,归入「可清理」分类型摆好。
+- **整理报告**:总览、各文件夹占用、类型分布、年份分布、最大的 20 个文件(CSV + xlsx)。
+- **一键撤销**:默认"移动"(整理硬盘不占额外空间),每一步写入撤销台账,随时可把文件全部还原回原位置;台账边做边写,中途崩溃也能撤销已完成的部分。
+
 ### 易用性
 - **试运行预览**:先列出"哪个文件 → 哪个文件夹"清单,确认后再执行;发现分错的可在预览里**双击直接改归属**(支持多选批量改),当场修正再执行。
 - **进度条 + 可取消**;日志同时写入输出目录 `分类日志_时间.txt`。
-- **拖拽添加**(装 tkinterdnd2 后)压缩包 / 文件夹。
+- **拖拽添加**:压缩包 / 文件夹直接拖进窗口。
 - **配置记忆**:输出目录、名单、选项自动保存;支持保存 / 加载任务模板(同一批人查多轮直接复用)。
 - **命令行模式**:带参数运行即无界面批处理,可配合计划任务自动处理固定收件目录(`-h` 查看用法)。
-- **高分屏清晰**:适配 Windows 125% / 150% / 200% 缩放;装 ttkbootstrap 后界面自动换现代主题。
+- **高分屏清晰**:PySide6(Qt)界面,适配 Windows 125% / 150% / 200% 缩放。
 
 ## 直接运行(需 Python 3.8+)
 
 ```bash
-# Windows 自带 tkinter;所有第三方依赖都是可选的,缺什么降级什么
+# 界面依赖 PySide6;其余第三方依赖都是可选的,缺什么降级什么
 pip install -r requirements.txt
 python 文件自动分类工具.py            # 图形界面
 python 文件自动分类工具.py -h         # 命令行用法
+```
+
+文件整理示例:
+
+```bash
+python 文件自动分类工具.py --mode organize -i D:\下载 -o D:\整理结果
+python 文件自动分类工具.py --mode organize -i E:\ -o E:\整理 --layout "{年}/{类别}"
+python 文件自动分类工具.py --list-layouts                       # 查看内置布局
+python 文件自动分类工具.py --undo "D:\整理结果\整理台账_20240115_103000.jsonl"
 ```
 
 命令行示例:
@@ -52,18 +74,20 @@ python 文件自动分类工具.py -i a.zip b.rar -o out --kw 张三 --kw "李�
 ```bash
 pip install pyinstaller -r requirements.txt
 
-pyinstaller --onefile --windowed --name 文件自动分类工具V2.0 ^
+pyinstaller --onefile --windowed --name 文件自动分类工具V4.0 ^
   --icon app.ico --add-data "app.ico;." --add-binary "UnRAR.exe;." ^
   --collect-submodules py7zr --collect-submodules rarfile --collect-submodules pyzipper ^
   --collect-submodules send2trash --collect-submodules openpyxl ^
-  --collect-all ttkbootstrap --collect-all tkinterdnd2 ^
   --hidden-import multivolumefile --hidden-import inflate64 --hidden-import pybcj ^
   --hidden-import pyppmd --hidden-import brotli ^
   文件自动分类工具.py
 ```
 
-生成的 `dist/文件自动分类工具V2.0.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
+生成的 `dist/文件自动分类工具V4.0.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
 (如不需要 Word/PDF 内容匹配,可不装 python-docx / pdfplumber,体积更小。)
+
+> 每次发版由 GitHub Actions 在 Windows 环境自动跑完测试后打包,
+> 可直接到 [Releases](../../releases) 下载免安装 exe。
 
 ## 代码结构
 
@@ -78,9 +102,13 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V2.0 ^
 | `fac/content_match.py` | Excel/Word/PDF/文本 内容匹配 |
 | `fac/excel_split.py` | Excel 按人拆分 |
 | `fac/report.py` | 人员 × 单位 反馈核对表 |
+| `fac/organize.py` | 文件整理模式(类型+时间布局、体检、撤销台账) |
+| `fac/filetypes.py` | 文件类型 / 来源 / 垃圾 / 副本标记词表 |
+| `fac/health.py` | 文件体检(重复、版本族、垃圾、大文件、空目录) |
+| `fac/undo.py` | 撤销台账与还原 |
 | `fac/gui.py` / `fac/cli.py` | 图形界面 / 命令行 |
 | `fac/config.py` | 配置记忆与任务模板 |
-| `tests/` | 单元测试(`python -m pytest tests/`) |
+| `tests/` | 单元测试(`python -m pytest tests/`,含界面无头冒烟) |
 | `使用说明.md` | 面向普通用户的详细使用说明 |
 | `评估与升级计划.md` | V1.2 评估报告与本次升级的规划 |
 | `UnRAR.exe` | RARLAB 官方免费解压器,用于 rar 支持 |
