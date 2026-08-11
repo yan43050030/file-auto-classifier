@@ -333,9 +333,14 @@ def run_organize(opts: OrganizeOptions, log, progress,
             folder = os.path.join(opts.out_dir, rel)
             try:
                 os.makedirs(long_path(folder), exist_ok=True)
+                # 先判断是否已在目标位置:否则 unique_path 会因为"目标名被
+                # 文件自己占着"而加序号,重复整理同一目录时不断产生 (1)(2)
+                if os.path.abspath(item.src) == \
+                        os.path.abspath(os.path.join(folder, item.fname)):
+                    stats[rel] = stats.get(rel, 0) + 1
+                    summary['files'] += 1
+                    continue          # 已经在正确位置,无需搬动
                 dst = unique_path(folder, item.fname)
-                if os.path.abspath(item.src) == os.path.abspath(dst):
-                    continue          # 原地整理时已经在正确位置
                 if move:
                     shutil.move(long_path(item.src), long_path(dst))
                     journal.record('move', item.src, dst)

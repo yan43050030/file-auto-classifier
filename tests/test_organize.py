@@ -258,3 +258,28 @@ def test_duplicate_copy_does_not_orphan_original(tmp_path):
     assert r['health']['old_versions'] == 0
     assert (out / '文档' / '2023' / '年度总结.docx').exists()   # 正本归位
     assert list((out / BUCKET_DUP).glob('*.docx'))              # 副本进重复区
+
+
+def test_reorganize_is_idempotent(tmp_path):
+    """对已整理好的目录重复整理,不能把文件反复改名成 (1)(2)。"""
+    src = tmp_path / 'src'
+    mk(src / 'a.docx', b'A')
+    mk(src / 'b.jpg', b'B')
+    out = tmp_path / 'out'
+    run(OrganizeOptions([str(src)], str(out), preview=False))
+    snap1 = sorted(str(p.relative_to(out)) for p in out.rglob('*')
+                   if p.is_file() and not p.name.startswith(('整理', '分类')))
+    # 再对整理结果本身跑一次(原地整理 / 重复运行)
+    _logs, r2 = run(OrganizeOptions([str(out)], str(out), preview=False))
+    snap2 = sorted(str(p.relative_to(out)) for p in out.rglob('*')
+                   if p.is_file() and not p.name.startswith(('整理', '分类')))
+    assert snap1 == snap2
+    assert r2['moved'] == 0            # 一个文件都不该被搬动
+
+
+def test_inplace_stable_files_still_counted(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / 'a.docx', b'A')
+    run(OrganizeOptions([str(src)], str(src), preview=False))
+    _logs, r = run(OrganizeOptions([str(src)], str(src), preview=False))
+    assert r['files'] == 1 and r['moved'] == 0
