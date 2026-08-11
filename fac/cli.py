@@ -88,6 +88,11 @@ def build_parser():
     g.add_argument('--date-mtime', action='store_true',
                    help='按年归类时只用文件修改时间(默认优先用照片拍摄时间/'
                         '文件名里的日期,更贴近文件的真实日期)')
+    g.add_argument('--scan-only', action='store_true',
+                   help='只体检不整理:仅统计重复/垃圾/旧版本并出报告,不动任何文件')
+    g.add_argument('--purge', action='append', default=[],
+                   choices=['可清理', '重复文件', '旧版本', 'all'],
+                   help='整理完把该体检文件夹里的文件删到回收站(可重复;all=全部)')
     g.add_argument('--rule', action='append', default=[], metavar='类型:值:目标',
                    help='自定义规则,如 contains:发票:财务票据 或 ext:psd:设计稿;'
                         '可重复,优先级高于类型布局')
@@ -150,7 +155,10 @@ def _run_organize(args):
         separate_large=args.separate_large,
         large_threshold=max(0, args.large_mb) * 1024 * 1024,
         clean_empty_dirs=not args.keep_empty_dirs,
-        date_source='mtime' if args.date_mtime else 'auto')
+        date_source='mtime' if args.date_mtime else 'auto',
+        scan_only=args.scan_only,
+        purge=(['可清理', '重复文件', '旧版本'] if 'all' in args.purge
+               else args.purge))
     result = {}
     run_organize(opts, log=print, progress=lambda *a: None,
                  cancel_event=threading.Event(), done_cb=result.update)
