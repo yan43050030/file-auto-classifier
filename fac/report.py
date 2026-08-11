@@ -85,11 +85,11 @@ def write_organize_report(out_dir: str, plan, hs: dict, log):
         cat = categorize(it.fname)
         c, b = cat_stat.get(cat, (0, 0))
         cat_stat[cat] = (c + 1, b + it.size)
+        # 用计划里记下的日期:此刻文件已被移走,再 stat 源路径必然失败
         try:
-            y = str(datetime.datetime.fromtimestamp(
-                os.path.getmtime(it.src)).year) if os.path.exists(it.src) \
-                else '未知'
-        except Exception:
+            y = str(datetime.datetime.fromtimestamp(it.date).year) \
+                if getattr(it, 'date', 0) else '未知'
+        except (OSError, OverflowError, ValueError):
             y = '未知'
         c, b = year_stat.get(y, (0, 0))
         year_stat[y] = (c + 1, b + it.size)

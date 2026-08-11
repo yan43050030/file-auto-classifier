@@ -425,6 +425,7 @@ class MainWindow(QMainWindow):
             ('org_empty', '整理后清理空文件夹', True),
             ('org_large', '把大文件单独归入「大文件」文件夹', False),
             ('org_preview', '试运行预览:先看清单并可手改,确认后再执行', True),
+            ('org_smart_date', '按真实日期归类:优先用照片拍摄时间/文件名里的日期', True),
         ]
         for idx, (key, label, default) in enumerate(g_specs):
             cb = QCheckBox(label); cb.setChecked(default); self._ckg[key] = cb
@@ -900,7 +901,9 @@ class MainWindow(QMainWindow):
             find_junk=self._ckg['org_junk'].isChecked(),
             separate_large=self._ckg['org_large'].isChecked(),
             large_threshold=self.spin_large.value() * 1024 * 1024,
-            clean_empty_dirs=self._ckg['org_empty'].isChecked())
+            clean_empty_dirs=self._ckg['org_empty'].isChecked(),
+            date_source=('auto' if self._ckg['org_smart_date'].isChecked()
+                         else 'mtime'))
 
     def _start_organize(self, out):
         opts = self._organize_opts(out)

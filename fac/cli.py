@@ -85,6 +85,9 @@ def build_parser():
                    help='大文件阈值(MB),默认 100')
     g.add_argument('--keep-empty-dirs', action='store_true',
                    help='整理后不清理空文件夹')
+    g.add_argument('--date-mtime', action='store_true',
+                   help='按年归类时只用文件修改时间(默认优先用照片拍摄时间/'
+                        '文件名里的日期,更贴近文件的真实日期)')
     g.add_argument('--rule', action='append', default=[], metavar='类型:值:目标',
                    help='自定义规则,如 contains:发票:财务票据 或 ext:psd:设计稿;'
                         '可重复,优先级高于类型布局')
@@ -146,7 +149,8 @@ def _run_organize(args):
         find_junk=not args.no_junk,
         separate_large=args.separate_large,
         large_threshold=max(0, args.large_mb) * 1024 * 1024,
-        clean_empty_dirs=not args.keep_empty_dirs)
+        clean_empty_dirs=not args.keep_empty_dirs,
+        date_source='mtime' if args.date_mtime else 'auto')
     result = {}
     run_organize(opts, log=print, progress=lambda *a: None,
                  cancel_event=threading.Event(), done_cb=result.update)

@@ -36,6 +36,7 @@ DEFAULTS = {
     'org_empty': True,
     'org_large': False,
     'org_preview': True,
+    'org_smart_date': True,
 }
 
 
