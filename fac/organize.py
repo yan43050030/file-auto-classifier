@@ -15,6 +15,7 @@ import traceback
 
 from .util import long_path, unique_path, safe_rel_path
 from .filetypes import categorize, detect_source, ext_of
+from .filedate import best_date
 from .rules import match_rules
 from . import health
 from .undo import Journal, default_journal_path
@@ -50,7 +51,8 @@ class OrganizeOptions:
                  find_dup=True, find_versions=True, find_junk=True,
                  separate_large=False, large_threshold=100 * 1024 * 1024,
                  clean_empty_dirs=True,
-                 skip_hidden=True):
+                 skip_hidden=True,
+                 date_source='auto'):      # auto=拍摄/文件名日期优先 | mtime
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.layout = layout or '{类别}/{年}'
@@ -64,15 +66,18 @@ class OrganizeOptions:
         self.large_threshold = int(large_threshold or 0)
         self.clean_empty_dirs = clean_empty_dirs
         self.skip_hidden = skip_hidden
+        self.date_source = date_source if date_source in ('auto', 'mtime') \
+            else 'auto'
 
 
 class OrganizeItem:
     """一个文件的整理计划。字段与「按人归档」的 PlanItem 对齐,
     以便复用界面的预览表格与手动改分。"""
 
-    __slots__ = ('src', 'fname', 'unit', 'action', 'targets', 'via', 'size')
+    __slots__ = ('src', 'fname', 'unit', 'action', 'targets', 'via', 'size',
+                 'date')
 
-    def __init__(self, src, fname, unit, targets, via, size=0):
+    def __init__(self, src, fname, unit, targets, via, size=0, date=0.0):
         self.src = src
         self.fname = fname
         self.unit = unit          # 来源:原目录名(或识别出的微信/截图等)
@@ -80,6 +85,7 @@ class OrganizeItem:
         self.targets = targets    # 相对目标路径列表,如 ['文档/2023']
         self.via = via            # 分类依据
         self.size = size
+        self.date = date          # 判定出的文件日期(时间戳)
 
     def display_target(self):
         return '、'.join(self.targets)
@@ -215,6 +221,7 @@ def build_plan(files, opts, log=None, cancel=None, progress=None):
         progress('health', 3, 3)
 
     plan = []
+    date_stats = {}
     for i, (path, size, mtime) in enumerate(files, 1):
         if cancel is not None and cancel.is_set():
             raise Cancelled
@@ -223,17 +230,21 @@ def build_plan(files, opts, log=None, cancel=None, progress=None):
         fname = os.path.basename(path)
         source = detect_source(fname)
         unit = source or os.path.basename(os.path.dirname(path)) or '根目录'
+        # 真实日期:拍摄时间 → 文件名里的日期 → 修改时间
+        fdate, dsrc = best_date(path, fname, mtime, opts.date_source)
+        date_stats[dsrc] = date_stats.get(dsrc, 0) + 1
 
         sp = special.get(path)
         if sp:
-            plan.append(OrganizeItem(path, fname, unit, [sp[0]], sp[1], size))
+            plan.append(OrganizeItem(path, fname, unit, [sp[0]], sp[1],
+                                     size, fdate))
             continue
 
         if opts.separate_large and opts.large_threshold and \
                 size >= opts.large_threshold:
             plan.append(OrganizeItem(
                 path, fname, unit, [BUCKET_LARGE],
-                f'体检:大文件({health.human_size(size)})', size))
+                f'体检:大文件({health.human_size(size)})', size, fdate))
             hs['large'] += 1
             continue
 
@@ -241,14 +252,19 @@ def build_plan(files, opts, log=None, cancel=None, progress=None):
             r = match_rules(path, opts.rules)
             if r is not None:
                 plan.append(OrganizeItem(path, fname, unit, [r.folder()],
-                                         f'规则:{r.value}', size))
+                                         f'规则:{r.value}', size, fdate))
                 continue
 
-        rel = render_layout(opts.layout, fname, mtime, source)
+        rel = render_layout(opts.layout, fname, fdate, source)
         plan.append(OrganizeItem(path, fname, unit, [rel],
-                                 f'类型:{categorize(fname)}', size))
+                                 f'类型:{categorize(fname)}', size, fdate))
     if progress:
         progress('classify', len(files), len(files))
+
+    if log and date_stats:
+        parts = [f'{k} {v} 个' for k, v in sorted(date_stats.items(),
+                                                  key=lambda x: -x[1])]
+        log('[日期] 归类依据: ' + '、'.join(parts))
 
     if opts.separate_large and not opts.find_dup:
         hs['large'] = sum(1 for it in plan if it.targets == [BUCKET_LARGE])
