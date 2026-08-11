@@ -20,6 +20,7 @@ from .rules import match_rules
 from . import health
 from .undo import Journal, default_journal_path
 from .report import write_organize_report
+from . import history
 
 # 体检专用文件夹(优先级高于常规布局)
 BUCKET_JUNK = '可清理'
@@ -33,6 +34,8 @@ LAYOUT_PRESETS = [
     ('{年}/{类别}', '年份 → 类型(推荐:回忆某年做过什么)'),
     ('{类别}/{年月}', '类型 → 年月(文件特别多时)'),
     ('{来源}/{类别}', '来源(微信/截图/相机…) → 类型'),
+    ('{原目录}/{类别}', '保留原来的文件夹名 → 类型(项目/课程资料适用)'),
+    ('{类别}/{大小档}', '类型 → 大小档(找占空间的东西)'),
 ]
 
 
@@ -54,7 +57,8 @@ class OrganizeOptions:
                  skip_hidden=True,
                  date_source='auto',       # auto=拍摄/文件名日期优先 | mtime
                  scan_only=False,          # 只体检出报告,不移动任何文件
-                 purge=None):              # 完成后删到回收站的桶名集合
+                 purge=None,               # 完成后删到回收站的桶名集合
+                 extract_archives=False):  # 先把压缩包解开再一起整理
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.layout = layout or '{类别}/{年}'
@@ -73,6 +77,7 @@ class OrganizeOptions:
         self.scan_only = scan_only
         # 可选值:'可清理' / '重复文件' / '旧版本'
         self.purge = set(purge or ())
+        self.extract_archives = extract_archives
 
 
 class OrganizeItem:
@@ -80,9 +85,10 @@ class OrganizeItem:
     以便复用界面的预览表格与手动改分。"""
 
     __slots__ = ('src', 'fname', 'unit', 'action', 'targets', 'via', 'size',
-                 'date')
+                 'date', 'from_archive')
 
-    def __init__(self, src, fname, unit, targets, via, size=0, date=0.0):
+    def __init__(self, src, fname, unit, targets, via, size=0, date=0.0,
+                 from_archive=False):
         self.src = src
         self.fname = fname
         self.unit = unit          # 来源:原目录名(或识别出的微信/截图等)
@@ -91,6 +97,7 @@ class OrganizeItem:
         self.via = via            # 分类依据
         self.size = size
         self.date = date          # 判定出的文件日期(时间戳)
+        self.from_archive = from_archive   # 解压产生的新文件
 
     def display_target(self):
         return '、'.join(self.targets)
@@ -98,7 +105,22 @@ class OrganizeItem:
 
 # ---------- 布局模板 ----------
 
-def render_layout(layout: str, fname: str, mtime: float, source=None) -> str:
+def size_bucket(size: int) -> str:
+    """把文件大小归入档位,便于快速找出占空间的东西。"""
+    mb = (size or 0) / (1024 * 1024)
+    if mb >= 1024:
+        return '超大(1GB以上)'
+    if mb >= 100:
+        return '大(100MB-1GB)'
+    if mb >= 10:
+        return '中(10-100MB)'
+    if mb >= 1:
+        return '小(1-10MB)'
+    return '微(1MB以下)'
+
+
+def render_layout(layout: str, fname: str, mtime: float, source=None,
+                  src_path=None, size=0, origin_dir=None) -> str:
     """把模板渲染成相对路径,如 '文档/2023'。"""
     try:
         dt = datetime.datetime.fromtimestamp(mtime)
@@ -111,6 +133,10 @@ def render_layout(layout: str, fname: str, mtime: float, source=None) -> str:
         '{年月}': f'{dt.year}-{dt.month:02d}',
         '{来源}': source or '其他来源',
         '{扩展名}': ext.upper() if ext else '无扩展名',
+        '{大小档}': size_bucket(size),
+        '{原目录}': (origin_dir or
+                     (os.path.basename(os.path.dirname(src_path))
+                      if src_path else '')) or '根目录',
     }
     out = layout
     for k, v in values.items():
@@ -161,7 +187,8 @@ def _add(files, seen, path):
         return
     # 工具自己产生的台账/报告/日志不参与整理
     base = os.path.basename(path)
-    if base.startswith(('整理台账_', '整理报告', '分类日志_', '反馈核对表')):
+    if base.startswith(('整理台账_', '整理报告', '分类日志_', '反馈核对表')) \
+            or base == '整理历史.db':
         return
     try:
         st = os.stat(long_path(path))
@@ -173,7 +200,9 @@ def _add(files, seen, path):
 
 # ---------- 生成整理计划 ----------
 
-def build_plan(files, opts, log=None, cancel=None, progress=None):
+def build_plan(files, opts, log=None, cancel=None, progress=None,
+               from_archive=None):
+    """from_archive: {解压出的文件路径: 来源压缩包名},用于正确标注来源。"""
     """体检 + 分类,生成整理计划。返回 (plan, health_stats)。"""
     hs = {'dup_groups': 0, 'dup_extra': 0, 'dup_bytes': 0,
           'junk': 0, 'junk_bytes': 0, 'old_versions': 0,
@@ -227,6 +256,7 @@ def build_plan(files, opts, log=None, cancel=None, progress=None):
 
     plan = []
     date_stats = {}
+    from_archive = from_archive or {}
     for i, (path, size, mtime) in enumerate(files, 1):
         if cancel is not None and cancel.is_set():
             raise Cancelled
@@ -234,7 +264,10 @@ def build_plan(files, opts, log=None, cancel=None, progress=None):
             progress('classify', i, len(files))
         fname = os.path.basename(path)
         source = detect_source(fname)
-        unit = source or os.path.basename(os.path.dirname(path)) or '根目录'
+        # 解压出来的文件:归属算作它所在的压缩包,而不是临时解压目录
+        arc_name = from_archive.get(path)
+        origin_dir = arc_name or os.path.basename(os.path.dirname(path))
+        unit = source or origin_dir or '根目录'
         # 真实日期:拍摄时间 → 文件名里的日期 → 修改时间
         fdate, dsrc = best_date(path, fname, mtime, opts.date_source)
         date_stats[dsrc] = date_stats.get(dsrc, 0) + 1
@@ -242,14 +275,15 @@ def build_plan(files, opts, log=None, cancel=None, progress=None):
         sp = special.get(path)
         if sp:
             plan.append(OrganizeItem(path, fname, unit, [sp[0]], sp[1],
-                                     size, fdate))
+                                     size, fdate, path in from_archive))
             continue
 
         if opts.separate_large and opts.large_threshold and \
                 size >= opts.large_threshold:
             plan.append(OrganizeItem(
                 path, fname, unit, [BUCKET_LARGE],
-                f'体检:大文件({health.human_size(size)})', size, fdate))
+                f'体检:大文件({health.human_size(size)})', size, fdate,
+                path in from_archive))
             hs['large'] += 1
             continue
 
@@ -257,12 +291,15 @@ def build_plan(files, opts, log=None, cancel=None, progress=None):
             r = match_rules(path, opts.rules)
             if r is not None:
                 plan.append(OrganizeItem(path, fname, unit, [r.folder()],
-                                         f'规则:{r.value}', size, fdate))
+                                         f'规则:{r.value}', size, fdate,
+                                         path in from_archive))
                 continue
 
-        rel = render_layout(opts.layout, fname, fdate, source)
+        rel = render_layout(opts.layout, fname, fdate, source,
+                            src_path=path, size=size, origin_dir=origin_dir)
         plan.append(OrganizeItem(path, fname, unit, [rel],
-                                 f'类型:{categorize(fname)}', size, fdate))
+                                 f'类型:{categorize(fname)}', size, fdate,
+                                 path in from_archive))
     if progress:
         progress('classify', len(files), len(files))
 
@@ -279,7 +316,8 @@ def build_plan(files, opts, log=None, cancel=None, progress=None):
 # ---------- 执行 ----------
 
 def run_organize(opts: OrganizeOptions, log, progress,
-                 confirm_cb=None, cancel_event=None, done_cb=None):
+                 confirm_cb=None, cancel_event=None, done_cb=None,
+                 ask_password=None):
     """执行一次文件整理(应在后台线程调用)。"""
     summary = {'files': 0, 'moved': 0, 'copied': 0, 'failed': 0,
                'cancelled': False, 'reports': [], 'journal': '',
@@ -307,6 +345,7 @@ def run_organize(opts: OrganizeOptions, log, progress,
             raise Cancelled
 
     journal = None
+    tmp_extract = None
     try:
         # ---- 1. 扫描 ----
         tee('开始扫描文件...')
@@ -321,10 +360,17 @@ def run_organize(opts: OrganizeOptions, log, progress,
             f'合计 {health.human_size(sum(s for _p, s, _m in files))}。')
         ck()
 
+        # ---- 1b. 可选:先把压缩包解开,内容物一并参与整理 ----
+        from_archive = set()
+        if opts.extract_archives and not opts.scan_only:
+            files, from_archive, tmp_extract = _extract_archives(
+                files, opts, tee, ask_password, cancel_event)
+            ck()
+
         # ---- 2. 体检 + 生成计划 ----
         tee('开始文件体检与分类...')
         plan, hs = build_plan(files, opts, log=tee, cancel=cancel_event,
-                              progress=progress)
+                              progress=progress, from_archive=from_archive)
         summary['health'] = hs
         ck()
 
@@ -369,6 +415,7 @@ def run_organize(opts: OrganizeOptions, log, progress,
              'layout': opts.layout})
         summary['journal'] = journal.path
         stats = summary['stats']
+        index_rows = []
 
         for i, item in enumerate(plan, 1):
             ck()
@@ -385,9 +432,11 @@ def run_organize(opts: OrganizeOptions, log, progress,
                     summary['files'] += 1
                     continue          # 已经在正确位置,无需搬动
                 dst = unique_path(folder, item.fname)
-                if move:
+                if move or item.from_archive:
                     shutil.move(long_path(item.src), long_path(dst))
-                    journal.record('move', item.src, dst)
+                    # 解压出来的是新文件:撤销时删掉即可回到原状
+                    journal.record('copy' if item.from_archive else 'move',
+                                   item.src, dst)
                     summary['moved'] += 1
                 else:
                     shutil.copy2(long_path(item.src), long_path(dst))
@@ -395,6 +444,8 @@ def run_organize(opts: OrganizeOptions, log, progress,
                     summary['copied'] += 1
                 stats[rel] = stats.get(rel, 0) + 1
                 summary['files'] += 1
+                index_rows.append((item.fname, item.src, dst, item.size,
+                                   rel, item.via))
             except Exception as e:
                 summary['failed'] += 1
                 tee(f'  [错误] 整理失败 {item.fname}: {e}')
@@ -437,6 +488,13 @@ def run_organize(opts: OrganizeOptions, log, progress,
         for k in sorted(stats):
             tee(f'  {k} : {stats[k]} 个')
 
+        if index_rows:
+            n_idx = history.record_run(opts.out_dir, journal.path,
+                                       index_rows, log=tee)
+            if n_idx:
+                tee(f'已记入整理历史({history.DB_NAME}),'
+                    f'以后可按文件名查"这个文件当初在哪"。')
+
         reports = write_organize_report(opts.out_dir, plan, hs, tee)
         summary['reports'] = reports
         for r in reports:
@@ -451,6 +509,8 @@ def run_organize(opts: OrganizeOptions, log, progress,
     except Exception:
         tee('运行出错:\n' + traceback.format_exc())
     finally:
+        if tmp_extract:
+            shutil.rmtree(tmp_extract, ignore_errors=True)
         if journal:
             journal.close()
         if log_fp:
@@ -495,3 +555,51 @@ def _purge_buckets(opts: OrganizeOptions, tee, cancel_event):
         if n > 20:
             tee(f'  …共删除 {n} 个文件(仅列出前 20 个)')
     return n
+
+
+def _extract_archives(files, opts: OrganizeOptions, tee, ask_password, cancel):
+    """把输入里的压缩包解开,解压出的文件加入整理清单。
+
+    返回 (新的文件清单, 解压产生的路径集合, 临时目录)。
+    压缩包本身保留并照常按类型归档,所以不会丢东西。"""
+    import tempfile
+    from . import extract as ex
+    from .password import PasswordManager
+
+    archives = [(p, s, m) for p, s, m in files
+                if ex.archive_kind(os.path.basename(p)) not in
+                (None, 'volume-later')]
+    if not archives:
+        return files, set(), None
+
+    tee(f'发现 {len(archives)} 个压缩包,先解开再一起整理...')
+    tmp = tempfile.mkdtemp(prefix='.解压tmp_', dir=opts.out_dir)
+    pm = PasswordManager(ask_password or (lambda n, a: None))
+    produced, produced_from, ok_count = [], {}, 0
+    for i, (arc, _sz, _mt) in enumerate(archives, 1):
+        if cancel is not None and cancel.is_set():
+            break
+        sub = os.path.join(tmp, f'arc_{i}')
+        os.makedirs(sub, exist_ok=True)
+        failures, skipped = [], []
+        try:
+            ex.extract_all_recursive(arc, sub, tee, pm, failures, skipped,
+                                     cancel=cancel)
+        except Exception as e:
+            tee(f'  [提示] 解压失败 {os.path.basename(arc)}: {e}')
+            continue
+        for root, _d, names in os.walk(sub):
+            for n in names:
+                fp = os.path.join(root, n)
+                try:
+                    st = os.stat(long_path(fp))
+                except OSError:
+                    continue
+                produced.append((fp, st.st_size, st.st_mtime))
+                produced_from[fp] = ex.unit_name(arc)
+        ok_count += 1
+
+    if produced:
+        tee(f'已从 {ok_count} 个压缩包解出 {len(produced)} 个文件,'
+            f'将与其他文件一起整理(压缩包本身仍会归档)。')
+    return files + produced, produced_from, tmp

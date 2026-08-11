@@ -345,3 +345,86 @@ def test_purge_not_triggered_by_default(tmp_path):
     _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
     assert not r.get('purged')
     assert list((out / BUCKET_JUNK).rglob('Thumbs.db'))    # 仍在,等人工确认
+
+
+# ---------- 新分类维度 ----------
+
+def test_size_bucket():
+    from fac.organize import size_bucket
+    assert size_bucket(500) == '微(1MB以下)'
+    assert size_bucket(5 * 1024 * 1024) == '小(1-10MB)'
+    assert size_bucket(50 * 1024 * 1024) == '中(10-100MB)'
+    assert size_bucket(500 * 1024 * 1024) == '大(100MB-1GB)'
+    assert size_bucket(2 * 1024 ** 3) == '超大(1GB以上)'
+
+
+def test_layout_keeps_original_folder(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '项目A' / '方案.docx', b'A')
+    mk(src / '项目B' / '图.jpg', b'B')
+    out = tmp_path / 'out'
+    run(OrganizeOptions([str(src)], str(out), layout='{原目录}/{类别}',
+                        preview=False))
+    assert (out / '项目A' / '文档' / '方案.docx').exists()
+    assert (out / '项目B' / '图片' / '图.jpg').exists()
+
+
+def test_layout_by_size(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '小文件.docx', b'x' * 100)
+    mk(src / '大文件.docx', b'y' * (3 * 1024 * 1024))
+    out = tmp_path / 'out'
+    run(OrganizeOptions([str(src)], str(out), layout='{类别}/{大小档}',
+                        preview=False))
+    assert (out / '文档' / '微(1MB以下)' / '小文件.docx').exists()
+    assert (out / '文档' / '小(1-10MB)' / '大文件.docx').exists()
+
+
+# ---------- 解开压缩包再整理 ----------
+
+def test_extract_archives_into_plan(tmp_path):
+    import zipfile
+    src = tmp_path / 'src'
+    src.mkdir()
+    z = src / '资料包.zip'
+    with zipfile.ZipFile(z, 'w') as zf:
+        zf.writestr('里面的报告.docx', 'INNER-DOC')
+        zf.writestr('里面的图.jpg', 'INNER-IMG')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False,
+                                   extract_archives=True))
+    # 压缩包内容被整理出来
+    assert list(out.rglob('里面的报告.docx'))
+    assert list(out.rglob('里面的图.jpg'))
+    # 压缩包本身也照常归档,不会丢
+    assert list(out.rglob('资料包.zip'))
+    # 临时解压目录已清理
+    assert not [p for p in out.iterdir() if p.name.startswith('.解压tmp')]
+
+
+def test_extract_archives_undo_removes_extracted(tmp_path):
+    import zipfile
+    from fac import undo as undo_mod
+    src = tmp_path / 'src'
+    src.mkdir()
+    with zipfile.ZipFile(src / '包.zip', 'w') as zf:
+        zf.writestr('内容.docx', 'DATA')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False,
+                                   extract_archives=True))
+    undo_mod.undo(r['journal'], log=lambda m: None)
+    # 压缩包移回原位,解压出来的新文件被删掉 —— 完全回到整理前
+    assert (src / '包.zip').exists()
+    assert not list(out.rglob('内容.docx'))
+
+
+def test_no_extract_by_default(tmp_path):
+    import zipfile
+    src = tmp_path / 'src'
+    src.mkdir()
+    with zipfile.ZipFile(src / '包.zip', 'w') as zf:
+        zf.writestr('内容.docx', 'DATA')
+    out = tmp_path / 'out'
+    run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert list(out.rglob('包.zip'))
+    assert not list(out.rglob('内容.docx'))     # 默认不展开别人的压缩包

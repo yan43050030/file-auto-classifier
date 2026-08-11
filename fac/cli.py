@@ -93,6 +93,10 @@ def build_parser():
     g.add_argument('--purge', action='append', default=[],
                    choices=['可清理', '重复文件', '旧版本', 'all'],
                    help='整理完把该体检文件夹里的文件删到回收站(可重复;all=全部)')
+    g.add_argument('--extract-archives', action='store_true',
+                   help='顺带解开压缩包,把里面的文件也一起整理(压缩包本身仍归档)')
+    g.add_argument('--history', metavar='关键字',
+                   help='在结果目录的整理历史里搜索文件(需配合 -o 指定目录)')
     g.add_argument('--rule', action='append', default=[], metavar='类型:值:目标',
                    help='自定义规则,如 contains:发票:财务票据 或 ext:psd:设计稿;'
                         '可重复,优先级高于类型布局')
@@ -157,11 +161,13 @@ def _run_organize(args):
         clean_empty_dirs=not args.keep_empty_dirs,
         date_source='mtime' if args.date_mtime else 'auto',
         scan_only=args.scan_only,
+        extract_archives=args.extract_archives,
         purge=(['可清理', '重复文件', '旧版本'] if 'all' in args.purge
                else args.purge))
     result = {}
     run_organize(opts, log=print, progress=lambda *a: None,
-                 cancel_event=threading.Event(), done_cb=result.update)
+                 cancel_event=threading.Event(), done_cb=result.update,
+                 ask_password=_ask_password_tty)
     if result.get('cancelled'):
         sys.exit(130)
     sys.exit(1 if result.get('failed') else 0)
@@ -175,6 +181,22 @@ def main(argv=None):
         for tpl, desc in LAYOUT_PRESETS:
             print(f'  {tpl:<16} {desc}')
         print('\n可用占位符: {类别} {年} {年月} {来源} {扩展名}')
+        sys.exit(0)
+
+    if args.history:
+        from . import history
+        if not args.out or not os.path.isdir(args.out):
+            print('错误:--history 需要用 -o 指定整理结果目录。', file=sys.stderr)
+            sys.exit(2)
+        rows = history.search(args.out, args.history)
+        if not rows:
+            print(f'历史记录里没有匹配「{args.history}」的文件。')
+            sys.exit(0)
+        print(f'匹配 {len(rows)} 条:')
+        for run_at, fname, src, dst, _cat in rows:
+            print(f'  [{run_at.replace("T", " ")}] {fname}')
+            print(f'      整理前: {src}')
+            print(f'      整理后: {dst}')
         sys.exit(0)
 
     if args.undo_journal:

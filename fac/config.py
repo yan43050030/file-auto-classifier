@@ -38,6 +38,7 @@ DEFAULTS = {
     'org_preview': True,
     'org_smart_date': True,
     'org_scan_only': False,
+    'org_extract': False,
 }
 
 

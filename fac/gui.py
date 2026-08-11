@@ -427,6 +427,7 @@ class MainWindow(QMainWindow):
             ('org_preview', '试运行预览:先看清单并可手改,确认后再执行', True),
             ('org_smart_date', '按真实日期归类:优先用照片拍摄时间/文件名里的日期', True),
             ('org_scan_only', '只体检不整理:仅出一份"有什么问题"的报告,不动任何文件', False),
+            ('org_extract', '顺带解开压缩包:把 zip/rar/7z 里的文件也一起整理', False),
         ]
         for idx, (key, label, default) in enumerate(g_specs):
             cb = QCheckBox(label); cb.setChecked(default); self._ckg[key] = cb
@@ -442,6 +443,10 @@ class MainWindow(QMainWindow):
         self.spin_large.setFixedWidth(110)
         sr.addWidget(self.spin_large)
         sr.addStretch()
+        self.btn_hist = QPushButton('🔍 查整理历史')
+        self.btn_hist.setFixedHeight(30)
+        self.btn_hist.clicked.connect(self._search_history)
+        sr.addWidget(self.btn_hist)
         self.btn_purge = QPushButton('🗑 清理「可清理/重复/旧版本」')
         self.btn_purge.setFixedHeight(30)
         self.btn_purge.clicked.connect(self._purge_now)
@@ -909,7 +914,8 @@ class MainWindow(QMainWindow):
             clean_empty_dirs=self._ckg['org_empty'].isChecked(),
             date_source=('auto' if self._ckg['org_smart_date'].isChecked()
                          else 'mtime'),
-            scan_only=self._ckg['org_scan_only'].isChecked())
+            scan_only=self._ckg['org_scan_only'].isChecked(),
+            extract_archives=self._ckg['org_extract'].isChecked())
 
     def _start_organize(self, out):
         opts = self._organize_opts(out)
@@ -932,8 +938,49 @@ class MainWindow(QMainWindow):
         threading.Thread(
             target=run_organize,
             args=(opts, self._log, self._on_progress,
-                  self._confirm_plan, self._cancel, done),
+                  self._confirm_plan, self._cancel, done,
+                  self._ask_password),
             daemon=True).start()
+
+    def _search_history(self):
+        """按文件名查历次整理:这个文件当初在哪、被整理到哪去了。"""
+        from . import history
+        out = self.txt_out.text().strip()
+        if not out or not os.path.isdir(out):
+            QMessageBox.warning(self, '提示', '请先选择整理结果所在的目录。')
+            return
+        if not os.path.isfile(history.db_path(out)):
+            QMessageBox.information(
+                self, '提示',
+                f'该目录还没有整理历史(整理过一次后才会有):\n{out}')
+            return
+        kw, ok = QInputDialog.getText(self, '查整理历史',
+                                      '输入文件名的一部分:')
+        if not ok or not kw.strip():
+            return
+        rows = history.search(out, kw)
+        if not rows:
+            QMessageBox.information(self, '未找到',
+                                    f'历史记录里没有匹配「{kw}」的文件。')
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f'整理历史 — 匹配「{kw}」({len(rows)} 条)')
+        dlg.resize(900, 460)
+        lay = QVBoxLayout(dlg)
+        tree = QTreeWidget()
+        tree.setHeaderLabels(['整理时间', '文件名', '整理前位置', '整理后位置'])
+        tree.setRootIsDecorated(False)
+        tree.setAlternatingRowColors(True)
+        for run_at, fname, src, dst, _cat in rows:
+            QTreeWidgetItem(tree, [run_at.replace('T', ' '), fname, src, dst])
+        for i, w in enumerate([140, 200, 270, 270]):
+            tree.header().resizeSection(i, w)
+        lay.addWidget(tree)
+        box = QDialogButtonBox(QDialogButtonBox.Close)
+        box.rejected.connect(dlg.reject)
+        box.accepted.connect(dlg.accept)
+        lay.addWidget(box)
+        dlg.exec()
 
     def _purge_now(self):
         """把整理结果里的「可清理/重复文件/旧版本」删到回收站。"""
