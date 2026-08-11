@@ -283,3 +283,65 @@ def test_inplace_stable_files_still_counted(tmp_path):
     run(OrganizeOptions([str(src)], str(src), preview=False))
     _logs, r = run(OrganizeOptions([str(src)], str(src), preview=False))
     assert r['files'] == 1 and r['moved'] == 0
+
+
+# ---------- 只体检模式 ----------
+
+def test_scan_only_moves_nothing(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '报告.docx', b'DOC')
+    mk(src / 'Thumbs.db', b'J')
+    mk(src / '资料.pdf', b'SAME', Y2023)
+    mk(src / 'sub' / '资料副本.pdf', b'SAME', Y2024)
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), scan_only=True,
+                                   preview=False))
+    assert r['scan_only'] is True
+    assert r['files'] == 0 and r['moved'] == 0
+    # 原文件一个都没动
+    assert (src / '报告.docx').exists() and (src / 'Thumbs.db').exists()
+    assert (src / 'sub' / '资料副本.pdf').exists()
+    # 但体检结论齐全,且报告已生成
+    assert r['health']['junk'] == 1 and r['health']['dup_extra'] == 1
+    assert r['reports']
+    # 输出目录里只有报告和日志,没有分类文件夹
+    entries = {p.name for p in out.iterdir()}
+    assert not {'文档', '可清理', '重复文件'} & entries
+
+
+def test_scan_only_preview_not_called(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / 'a.docx')
+    out = tmp_path / 'out'
+    called = []
+    run(OrganizeOptions([str(src)], str(out), scan_only=True, preview=True),
+        confirm=lambda plan: called.append(1) or True)
+    assert called == []          # 不动文件,自然不该弹预览
+
+
+# ---------- 一键清理 ----------
+
+def test_purge_removes_only_health_buckets(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '正常.docx', b'KEEP')
+    mk(src / 'Thumbs.db', b'J')
+    mk(src / '资料.pdf', b'SAME', Y2023)
+    mk(src / 'sub' / '资料副本.pdf', b'SAME', Y2024)
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False,
+                                   purge=['可清理', '重复文件']))
+    assert r['purged'] == 2                       # 垃圾 1 + 重复 1
+    assert not (out / BUCKET_JUNK).exists()
+    assert not (out / BUCKET_DUP).exists()
+    # 正常分类的文件必须原封不动
+    assert (out / '文档' / '2024' / '正常.docx').exists()
+    assert (out / 'PDF' / '2023' / '资料.pdf').exists()
+
+
+def test_purge_not_triggered_by_default(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / 'Thumbs.db', b'J')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert not r.get('purged')
+    assert list((out / BUCKET_JUNK).rglob('Thumbs.db'))    # 仍在,等人工确认

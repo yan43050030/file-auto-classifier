@@ -52,7 +52,9 @@ class OrganizeOptions:
                  separate_large=False, large_threshold=100 * 1024 * 1024,
                  clean_empty_dirs=True,
                  skip_hidden=True,
-                 date_source='auto'):      # auto=拍摄/文件名日期优先 | mtime
+                 date_source='auto',       # auto=拍摄/文件名日期优先 | mtime
+                 scan_only=False,          # 只体检出报告,不移动任何文件
+                 purge=None):              # 完成后删到回收站的桶名集合
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.layout = layout or '{类别}/{年}'
@@ -68,6 +70,9 @@ class OrganizeOptions:
         self.skip_hidden = skip_hidden
         self.date_source = date_source if date_source in ('auto', 'mtime') \
             else 'auto'
+        self.scan_only = scan_only
+        # 可选值:'可清理' / '重复文件' / '旧版本'
+        self.purge = set(purge or ())
 
 
 class OrganizeItem:
@@ -323,6 +328,29 @@ def run_organize(opts: OrganizeOptions, log, progress,
         summary['health'] = hs
         ck()
 
+        # ---- 3a. 只体检:出一份"有什么问题"的报告,一个文件都不动 ----
+        if opts.scan_only:
+            tee('\n【只体检模式】不移动任何文件,仅生成报告:')
+            tee(f'  文件总数 {len(plan)},'
+                f'占用 {health.human_size(hs["total_bytes"])}')
+            if hs['dup_extra']:
+                tee(f'  重复文件 {hs["dup_extra"]} 个(共 {hs["dup_groups"]} 组),'
+                    f'删除可省出 {health.human_size(hs["dup_bytes"])}')
+            if hs['junk']:
+                tee(f'  垃圾/临时文件 {hs["junk"]} 个,'
+                    f'占用 {health.human_size(hs["junk_bytes"])}')
+            if hs['old_versions']:
+                tee(f'  旧版本文件 {hs["old_versions"]} 个')
+            if not (hs['dup_extra'] or hs['junk'] or hs['old_versions']):
+                tee('  没有发现重复、垃圾或旧版本文件。')
+            reports = write_organize_report(opts.out_dir, plan, hs, tee)
+            summary['reports'] = reports
+            summary['scan_only'] = True
+            for r in reports:
+                tee(f'已生成体检报告: {os.path.basename(r)}')
+            tee('如需真正整理,去掉「只体检」勾选后再运行一次。')
+            return
+
         # ---- 3. 预览确认(可手动改分) ----
         if opts.preview and confirm_cb is not None:
             tee(f'已生成整理计划(共 {len(plan)} 个文件),等待确认...')
@@ -385,6 +413,10 @@ def run_organize(opts: OrganizeOptions, log, progress,
             if summary['empty_dirs']:
                 tee(f'已清理 {summary["empty_dirs"]} 个空文件夹。')
 
+        # ---- 5b. 可选:把体检挑出来的文件删到回收站 ----
+        if opts.purge:
+            summary['purged'] = _purge_buckets(opts, tee, cancel_event)
+
         # ---- 6. 汇总 + 整理报告 ----
         tee(f'\n整理完成!共处理 {summary["files"]} 个文件'
             f'({"移动" if move else "复制"} {summary["moved"] or summary["copied"]} 个)。')
@@ -396,6 +428,9 @@ def run_organize(opts: OrganizeOptions, log, progress,
                 f'占用 {health.human_size(hs["junk_bytes"])}。')
         if hs['old_versions']:
             tee(f'旧版本文件 {hs["old_versions"]} 个已归入「{BUCKET_OLD}」。')
+        if summary.get('purged'):
+            tee(f'已删除(移入回收站){summary["purged"]} 个文件,'
+                f'来自: {"、".join(sorted(opts.purge))}。')
         if summary['failed']:
             tee(f'有 {summary["failed"]} 个文件整理失败(见上方日志)。')
         tee('各目标文件夹文件数:')
@@ -425,3 +460,38 @@ def run_organize(opts: OrganizeOptions, log, progress,
                 pass
         if done_cb:
             done_cb(summary)
+
+
+def _purge_buckets(opts: OrganizeOptions, tee, cancel_event):
+    """把指定体检文件夹(可清理/重复文件/旧版本)里的文件删到回收站。
+
+    只删这几个由工具自己归集出来的文件夹,不碰其他分类结果;
+    删完顺手移除空掉的桶目录。返回删除的文件数。"""
+    from .util import delete_to_trash
+    n = 0
+    for bucket in sorted(opts.purge):
+        base = os.path.join(opts.out_dir, bucket)
+        if not os.path.isdir(base):
+            continue
+        tee(f'开始清理「{bucket}」...')
+        for root, _dirs, files in os.walk(base, topdown=False):
+            for f in files:
+                if cancel_event is not None and cancel_event.is_set():
+                    tee('  清理已中断。')
+                    return n
+                fp = os.path.join(root, f)
+                try:
+                    way = delete_to_trash(fp)
+                    n += 1
+                    if n <= 20:
+                        tee(f'  已删除({way}): {f}')
+                except Exception as e:
+                    tee(f'  [提示] 删除失败 {f}: {e}')
+            try:
+                if root != base or not os.listdir(base):
+                    os.rmdir(long_path(root))
+            except OSError:
+                pass
+        if n > 20:
+            tee(f'  …共删除 {n} 个文件(仅列出前 20 个)')
+    return n

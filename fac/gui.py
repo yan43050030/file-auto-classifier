@@ -426,6 +426,7 @@ class MainWindow(QMainWindow):
             ('org_large', '把大文件单独归入「大文件」文件夹', False),
             ('org_preview', '试运行预览:先看清单并可手改,确认后再执行', True),
             ('org_smart_date', '按真实日期归类:优先用照片拍摄时间/文件名里的日期', True),
+            ('org_scan_only', '只体检不整理:仅出一份"有什么问题"的报告,不动任何文件', False),
         ]
         for idx, (key, label, default) in enumerate(g_specs):
             cb = QCheckBox(label); cb.setChecked(default); self._ckg[key] = cb
@@ -441,6 +442,10 @@ class MainWindow(QMainWindow):
         self.spin_large.setFixedWidth(110)
         sr.addWidget(self.spin_large)
         sr.addStretch()
+        self.btn_purge = QPushButton('🗑 清理「可清理/重复/旧版本」')
+        self.btn_purge.setFixedHeight(30)
+        self.btn_purge.clicked.connect(self._purge_now)
+        sr.addWidget(self.btn_purge)
         self.btn_undo = QPushButton('↩ 撤销上次整理')
         self.btn_undo.setFixedHeight(30)
         self.btn_undo.clicked.connect(self._undo_last)
@@ -903,7 +908,8 @@ class MainWindow(QMainWindow):
             large_threshold=self.spin_large.value() * 1024 * 1024,
             clean_empty_dirs=self._ckg['org_empty'].isChecked(),
             date_source=('auto' if self._ckg['org_smart_date'].isChecked()
-                         else 'mtime'))
+                         else 'mtime'),
+            scan_only=self._ckg['org_scan_only'].isChecked())
 
     def _start_organize(self, out):
         opts = self._organize_opts(out)
@@ -928,6 +934,77 @@ class MainWindow(QMainWindow):
             args=(opts, self._log, self._on_progress,
                   self._confirm_plan, self._cancel, done),
             daemon=True).start()
+
+    def _purge_now(self):
+        """把整理结果里的「可清理/重复文件/旧版本」删到回收站。"""
+        from .organize import BUCKET_JUNK, BUCKET_DUP, BUCKET_OLD
+        from .health import human_size
+        out = self.txt_out.text().strip()
+        if not out or not os.path.isdir(out):
+            QMessageBox.warning(self, '提示', '请先选择整理结果所在的目录。')
+            return
+        found = []
+        for b in (BUCKET_JUNK, BUCKET_DUP, BUCKET_OLD):
+            base = os.path.join(out, b)
+            if not os.path.isdir(base):
+                continue
+            n, size = 0, 0
+            for root, _d, fs in os.walk(base):
+                for f in fs:
+                    n += 1
+                    try:
+                        size += os.path.getsize(os.path.join(root, f))
+                    except OSError:
+                        pass
+            if n:
+                found.append((b, n, size))
+        if not found:
+            QMessageBox.information(
+                self, '提示',
+                f'该目录里没有「可清理 / 重复文件 / 旧版本」可删:\n{out}')
+            return
+
+        names = [f'{b}({n} 个,{human_size(sz)})' for b, n, sz in found]
+        picked, ok = QInputDialog.getItem(
+            self, '选择要清理的内容',
+            '把下列文件夹里的文件删到回收站(可先自行核对内容):',
+            names + ['全部'], len(names), False)
+        if not ok:
+            return
+        targets = ([b for b, _n, _s in found] if picked == '全部'
+                   else [found[names.index(picked)][0]])
+        total = sum(n for b, n, _s in found if b in targets)
+        saved = sum(sz for b, _n, sz in found if b in targets)
+        r = QMessageBox.question(
+            self, '确认清理',
+            f'将把 {total} 个文件移入回收站,腾出约 {human_size(saved)}。\n'
+            f'涉及: {"、".join(targets)}\n\n'
+            f'(移入回收站,误删可从回收站还原;但整理台账无法再撤销这些文件)\n'
+            f'确定继续吗?',
+            QMessageBox.Yes | QMessageBox.No)
+        if r != QMessageBox.Yes:
+            return
+
+        from .organize import OrganizeOptions, _purge_buckets
+        self._begin_job()
+
+        def work():
+            opts = OrganizeOptions([], out, purge=targets)
+            n = _purge_buckets(opts, self._log, self._cancel)
+            self._ui_call(lambda: self._on_purge_done(n, saved))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_purge_done(self, n, saved):
+        from .health import human_size
+        self.btn_run.setEnabled(True)
+        self._on_mode_changed()
+        self.btn_cancel.setEnabled(False)
+        self.progress.setVisible(False)
+        self.lbl_prog.setVisible(False)
+        QMessageBox.information(
+            self, '清理完成',
+            f'已把 {n} 个文件移入回收站,腾出约 {human_size(saved)}。')
 
     def _undo_last(self):
         out = self.txt_out.text().strip()
@@ -1072,6 +1149,18 @@ class MainWindow(QMainWindow):
     def _on_organize_done(self, summary):
         from .health import human_size
         hs = summary.get('health', {})
+        if summary.get('scan_only'):
+            lines = ['体检完成(未移动任何文件):',
+                     f'· 文件总数 {len(summary.get("stats", {})) or ""}'.rstrip(),
+                     f'· 重复文件 {hs.get("dup_extra", 0)} 个,'
+                     f'删除可省出 {human_size(hs.get("dup_bytes", 0))}',
+                     f'· 垃圾/临时文件 {hs.get("junk", 0)} 个,'
+                     f'占用 {human_size(hs.get("junk_bytes", 0))}',
+                     f'· 旧版本 {hs.get("old_versions", 0)} 个',
+                     '\n详见输出目录里的「整理报告」。'
+                     '去掉「只体检」勾选后再运行,即可真正整理。']
+            QMessageBox.information(self, '体检完成', '\n'.join(lines))
+            return
         lines = [f'整理完成!共处理 {summary.get("files", 0)} 个文件。']
         if hs.get('dup_extra'):
             lines.append(f'· 重复文件 {hs["dup_extra"]} 个 → 「重复文件」,'

@@ -37,6 +37,7 @@ DEFAULTS = {
     'org_large': False,
     'org_preview': True,
     'org_smart_date': True,
+    'org_scan_only': False,
 }
 
 
