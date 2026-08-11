@@ -26,7 +26,7 @@
 - **Excel 按人拆分(可选)**:一个表里有多个人的行时,按行拆成每人一份,原表保留在"原始反馈"。
 - **内容去重(可选)**:同一人员文件夹内,多个单位反馈的相同文件只留一份。
 
-### 文件整理(V4.0 新增)
+### 文件整理
 - **按用途分类**:文档 / 表格 / 演示 / PDF / 图片 / 视频 / 音频 / 压缩包 / 安装程序 / 电子书 / 代码 / 设计源文件 / 字体… 按"怎么用"而非扩展名归类。
 - **按真实日期归类**:照片优先用 EXIF 拍摄时间,其次解析文件名里的日期(`IMG_20180712`、`微信图片_20230815…`、`2021-03-08…`),都没有才用修改时间 —— 避免"从硬盘拷回来的老照片全被归到今年"。
 - **目录布局可选**:`{类别}/{年}`、`{年}/{类别}`、`{类别}/{年月}`、`{来源}/{类别}`、`{原目录}/{类别}`(保留原文件夹名)、`{类别}/{大小档}`,也可自由组合占位符。
@@ -79,7 +79,7 @@ python 文件自动分类工具.py -i a.zip b.rar -o out --kw 张三 --kw "李�
 ```bash
 pip install pyinstaller -r requirements.txt
 
-pyinstaller --onefile --windowed --name 文件自动分类工具V4.0 ^
+pyinstaller --onefile --windowed --name 文件自动分类工具V4.1 ^
   --icon app.ico --add-data "app.ico;." --add-binary "UnRAR.exe;." ^
   --collect-submodules py7zr --collect-submodules rarfile --collect-submodules pyzipper ^
   --collect-submodules send2trash --collect-submodules openpyxl ^
@@ -88,7 +88,7 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V4.0 ^
   文件自动分类工具.py
 ```
 
-生成的 `dist/文件自动分类工具V4.0.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
+生成的 `dist/文件自动分类工具V4.1.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
 (如不需要 Word/PDF 内容匹配,可不装 python-docx / pdfplumber,体积更小。)
 
 > 每次发版由 GitHub Actions 在 Windows 环境自动跑完测试后打包,
