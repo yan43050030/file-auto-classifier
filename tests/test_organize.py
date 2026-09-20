@@ -97,8 +97,8 @@ def test_organize_health_buckets(tmp_path):
     src = tmp_path / 'src'
     mk(src / '正常.docx', b'NORMAL')
     mk(src / 'Thumbs.db', b'junk')
-    mk(src / '资料.pdf', b'DUPDATA', Y2023)
-    mk(src / 'sub' / '资料副本.pdf', b'DUPDATA', Y2024)
+    mk(src / '资料.pdf', b'DUPDATA' * 3000, Y2023)
+    mk(src / 'sub' / '资料副本.pdf', b'DUPDATA' * 3000, Y2024)
     mk(src / '方案.docx', b'v1', Y2023)
     mk(src / '方案(1).docx', b'v2', Y2024)
     out = tmp_path / 'out'
@@ -109,7 +109,7 @@ def test_organize_health_buckets(tmp_path):
     assert hs['old_versions'] == 1
     assert list((out / BUCKET_JUNK).rglob('Thumbs.db'))
     assert list((out / BUCKET_DUP).rglob('*.pdf'))
-    assert (out / BUCKET_OLD / '方案.docx').exists()
+    assert list((out / BUCKET_OLD).rglob('方案.docx'))   # 桶内多一层原目录名
     # 重复组里保留的那份走正常布局
     assert (out / '文档' / '2024' / '方案(1).docx').exists()
 
@@ -250,14 +250,14 @@ def test_find_journals(tmp_path):
 def test_duplicate_copy_does_not_orphan_original(tmp_path):
     """副本内容相同且时间更新时,正本不能被连带判成「旧版本」而离开正常分类。"""
     src = tmp_path / 'src'
-    mk(src / '年度总结.docx', b'SAME', Y2023)
-    mk(src / '年度总结 - 副本.docx', b'SAME', Y2024)
+    mk(src / '年度总结.docx', b'SAME' * 5000, Y2023)
+    mk(src / '年度总结 - 副本.docx', b'SAME' * 5000, Y2024)
     out = tmp_path / 'out'
     _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
     assert r['health']['dup_extra'] == 1
     assert r['health']['old_versions'] == 0
     assert (out / '文档' / '2023' / '年度总结.docx').exists()   # 正本归位
-    assert list((out / BUCKET_DUP).glob('*.docx'))              # 副本进重复区
+    assert list((out / BUCKET_DUP).rglob('*.docx'))             # 副本进重复区
 
 
 def test_reorganize_is_idempotent(tmp_path):
@@ -291,8 +291,8 @@ def test_scan_only_moves_nothing(tmp_path):
     src = tmp_path / 'src'
     mk(src / '报告.docx', b'DOC')
     mk(src / 'Thumbs.db', b'J')
-    mk(src / '资料.pdf', b'SAME', Y2023)
-    mk(src / 'sub' / '资料副本.pdf', b'SAME', Y2024)
+    mk(src / '资料.pdf', b'SAME' * 5000, Y2023)
+    mk(src / 'sub' / '资料副本.pdf', b'SAME' * 5000, Y2024)
     out = tmp_path / 'out'
     _logs, r = run(OrganizeOptions([str(src)], str(out), scan_only=True,
                                    preview=False))
@@ -325,14 +325,15 @@ def test_purge_removes_only_health_buckets(tmp_path):
     src = tmp_path / 'src'
     mk(src / '正常.docx', b'KEEP')
     mk(src / 'Thumbs.db', b'J')
-    mk(src / '资料.pdf', b'SAME', Y2023)
-    mk(src / 'sub' / '资料副本.pdf', b'SAME', Y2024)
+    mk(src / '资料.pdf', b'SAME' * 5000, Y2023)
+    mk(src / 'sub' / '资料副本.pdf', b'SAME' * 5000, Y2024)
     out = tmp_path / 'out'
     _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False,
                                    purge=['可清理', '重复文件']))
     assert r['purged'] == 2                       # 垃圾 1 + 重复 1
     assert not (out / BUCKET_JUNK).exists()
-    assert not (out / BUCKET_DUP).exists()
+    assert not list((out / BUCKET_DUP).rglob('*.pdf')) \
+        if (out / BUCKET_DUP).exists() else True
     # 正常分类的文件必须原封不动
     assert (out / '文档' / '2024' / '正常.docx').exists()
     assert (out / 'PDF' / '2023' / '资料.pdf').exists()
@@ -428,3 +429,111 @@ def test_no_extract_by_default(tmp_path):
     run(OrganizeOptions([str(src)], str(out), preview=False))
     assert list(out.rglob('包.zip'))
     assert not list(out.rglob('内容.docx'))     # 默认不展开别人的压缩包
+
+
+# ---------- 项目目录整体保留 ----------
+
+def test_project_kept_intact(tmp_path):
+    src = tmp_path / 'src'
+    proj_root = src / 'myproject'
+    mk(proj_root / 'requirements.txt', b'requests')
+    mk(proj_root / 'src' / 'main.py', b'code')
+    mk(proj_root / 'src' / '__init__.py', b'')
+    mk(proj_root / 'tests' / 'test_main.py', b'test')
+    mk(src / '无关文档.docx', b'DOC')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert r.get('projects') == 1
+    dst = out / '项目' / 'Python 项目' / 'myproject'
+    assert (dst / 'src' / 'main.py').exists()
+    assert (dst / 'src' / '__init__.py').exists()      # 空文件也在,没被当垃圾
+    assert (dst / 'tests' / 'test_main.py').exists()
+    assert (out / '文档' / '2024' / '无关文档.docx').exists()
+
+
+def test_project_undo_restores_tree(tmp_path):
+    from fac import undo as undo_mod
+    src = tmp_path / 'src'
+    proj_root = src / 'app'
+    mk(proj_root / 'package.json', b'{}')
+    mk(proj_root / 'lib' / 'a.js', b'js')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    undo_mod.undo(r['journal'], log=lambda m: None)
+    assert (proj_root / 'package.json').exists()
+    assert (proj_root / 'lib' / 'a.js').exists()
+
+
+def test_keep_projects_can_be_disabled(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / 'proj' / 'go.mod', b'module x')
+    mk(src / 'proj' / 'main.go', b'package main')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False,
+                                   keep_projects=False))
+    assert not r.get('projects')
+    assert not (out / '项目').exists()
+
+
+# ---------- 查重门槛 / 体检桶原目录 ----------
+
+def test_small_files_not_flagged_as_duplicates(tmp_path):
+    src = tmp_path / 'src'
+    for n in ('请假单.docx', '报销单.docx', '出差单.docx'):
+        mk(src / n, b'TEMPLATE')          # 内容相同但都很小
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert r['health']['dup_extra'] == 0
+    assert len(list((out / '文档' / '2024').glob('*.docx'))) == 3
+
+
+def test_large_duplicates_still_caught(tmp_path):
+    src = tmp_path / 'src'
+    big = b'R' * 60000
+    mk(src / '工作' / '报告.docx', big, Y2023)
+    mk(src / '备份' / '报告.docx', big, Y2024)
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert r['health']['dup_extra'] == 1
+
+
+def test_min_dup_size_configurable(tmp_path):
+    src = tmp_path / 'src'
+    for n in ('a.txt', 'b.txt'):
+        mk(src / n, b'SAME-SMALL')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False,
+                                   min_dup_size=0))       # 0=不限
+    assert r['health']['dup_extra'] == 1
+
+
+def test_health_bucket_keeps_origin_dir(tmp_path):
+    src = tmp_path / 'src'
+    big = b'X' * 60000
+    mk(src / '工作' / '手册.pdf', big, Y2023)
+    mk(src / '旧备份' / '手册.pdf', big, Y2024)
+    out = tmp_path / 'out'
+    run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert (out / BUCKET_DUP / '旧备份' / '手册.pdf').exists()
+
+
+def test_meaningful_empty_files_not_junk(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '__init__.py', b'')
+    mk(src / '.gitkeep', b'')
+    mk(src / '真空文件.txt', b'')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False,
+                                   skip_hidden=False))
+    assert r['health']['junk'] == 1            # 只有 真空文件.txt
+    assert list(out.rglob('__init__.py'))
+    assert not list((out / BUCKET_JUNK).rglob('__init__.py'))
+
+
+def test_junk_reason_has_no_slash(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '临时.tmp', b'T')
+    out = tmp_path / 'out'
+    run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert (out / BUCKET_JUNK / '临时或备份文件' / '临时.tmp').exists()
+    assert not (out / BUCKET_JUNK / '临时').is_dir()

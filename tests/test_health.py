@@ -22,18 +22,27 @@ def pairs(paths):
 
 
 def test_find_duplicates_basic(tmp_path):
-    a = mk(tmp_path / 'a.txt', b'SAME-CONTENT')
-    b = mk(tmp_path / 'sub' / 'b.txt', b'SAME-CONTENT')
-    c = mk(tmp_path / 'c.txt', b'DIFFERENT')
+    same = b'SAME-CONTENT' * 2000          # 需超过默认 10KB 查重门槛
+    a = mk(tmp_path / 'a.txt', same)
+    b = mk(tmp_path / 'sub' / 'b.txt', same)
+    c = mk(tmp_path / 'c.txt', b'DIFFERENT' * 2000)
     groups = health.find_duplicates(pairs([a, b, c]))
     assert len(groups) == 1
     assert set(groups[0]) == {a, b}
 
 
 def test_find_duplicates_same_size_different_content(tmp_path):
-    a = mk(tmp_path / 'a.txt', b'AAAA')
-    b = mk(tmp_path / 'b.txt', b'BBBB')      # 同样大小,内容不同
+    a = mk(tmp_path / 'a.txt', b'A' * 20000)
+    b = mk(tmp_path / 'b.txt', b'B' * 20000)   # 同样大小,内容不同
     assert health.find_duplicates(pairs([a, b])) == []
+
+
+def test_small_files_skipped_by_default(tmp_path):
+    # 小文件内容相同是常态(空模板/配置),默认不查重以免误伤
+    a = mk(tmp_path / 'a.cfg', b'SAME')
+    b = mk(tmp_path / 'b.cfg', b'SAME')
+    assert health.find_duplicates(pairs([a, b])) == []
+    assert len(health.find_duplicates(pairs([a, b]), min_size=0)) == 1
 
 
 def test_find_duplicates_large_files(tmp_path):
@@ -48,8 +57,9 @@ def test_find_duplicates_large_files(tmp_path):
 
 def test_duplicate_keeps_original_first(tmp_path):
     # 名字像副本的不应被选为"保留"
-    orig = mk(tmp_path / '报告.docx', b'DATA', mtime=1000000)
-    copy = mk(tmp_path / '报告(1).docx', b'DATA', mtime=2000000)
+    data = b'DATA' * 5000
+    orig = mk(tmp_path / '报告.docx', data, mtime=1000000)
+    copy = mk(tmp_path / '报告(1).docx', data, mtime=2000000)
     groups = health.find_duplicates(pairs([copy, orig]))
     assert groups[0][0] == orig
 

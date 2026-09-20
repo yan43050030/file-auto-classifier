@@ -428,11 +428,28 @@ class MainWindow(QMainWindow):
             ('org_smart_date', '按真实日期归类:优先用照片拍摄时间/文件名里的日期', True),
             ('org_scan_only', '只体检不整理:仅出一份"有什么问题"的报告,不动任何文件', False),
             ('org_extract', '顺带解开压缩包:把 zip/rar/7z 里的文件也一起整理', False),
+            ('org_keep_proj', '保护代码/工程目录:整体搬运不打散(强烈建议开启)', True),
+            ('org_hidden', '包含隐藏文件(以 . 开头的文件)', False),
         ]
         for idx, (key, label, default) in enumerate(g_specs):
             cb = QCheckBox(label); cb.setChecked(default); self._ckg[key] = cb
             ggrid.addWidget(cb, idx // 2, idx % 2)
         gl.addLayout(ggrid)
+
+        dr = QHBoxLayout(); dr.setSpacing(6)
+        dr.addWidget(QLabel('查重最小体积:'))
+        self.spin_mindup = QSpinBox()
+        self.spin_mindup.setRange(0, 1024 * 1024)
+        self.spin_mindup.setValue(10)
+        self.spin_mindup.setSuffix(' KB')
+        self.spin_mindup.setFixedWidth(110)
+        dr.addWidget(self.spin_mindup)
+        _t = QLabel('(小于此体积的文件不查重 —— 空模板/配置文件内容相同是常态,'
+                    '误判成重复反而添乱;填 0 则不限)')
+        _t.setStyleSheet(f'color:{TEXT_SEC}; font-size:11px;')
+        _t.setWordWrap(True)
+        dr.addWidget(_t, 1)
+        gl.addLayout(dr)
 
         sr = QHBoxLayout(); sr.setSpacing(6)
         sr.addWidget(QLabel('大文件阈值:'))
@@ -683,6 +700,7 @@ class MainWindow(QMainWindow):
             'org_layout': self.cmb_layout.currentText().split('—')[0].strip(),
             'org_op_mode': 'copy' if self._rg_op.checkedId() == 1 else 'move',
             'org_large_mb': self.spin_large.value(),
+            'org_min_dup_kb': self.spin_mindup.value(),
         }
         for k, cb in self._ckg.items():
             cfg[k] = cb.isChecked()
@@ -717,6 +735,7 @@ class MainWindow(QMainWindow):
             self._rg_op.button(1 if cfg.get('org_op_mode') == 'copy'
                                else 0).setChecked(True)
             self.spin_large.setValue(int(cfg.get('org_large_mb', 100)))
+            self.spin_mindup.setValue(int(cfg.get('org_min_dup_kb', 10)))
             for k, cb in self._ckg.items():
                 cb.setChecked(bool(cfg.get(k, cb.isChecked())))
             self._on_mode_changed()
@@ -915,7 +934,10 @@ class MainWindow(QMainWindow):
             date_source=('auto' if self._ckg['org_smart_date'].isChecked()
                          else 'mtime'),
             scan_only=self._ckg['org_scan_only'].isChecked(),
-            extract_archives=self._ckg['org_extract'].isChecked())
+            extract_archives=self._ckg['org_extract'].isChecked(),
+            keep_projects=self._ckg['org_keep_proj'].isChecked(),
+            skip_hidden=not self._ckg['org_hidden'].isChecked(),
+            min_dup_size=self.spin_mindup.value() * 1024)
 
     def _start_organize(self, out):
         opts = self._organize_opts(out)
@@ -1217,6 +1239,9 @@ class MainWindow(QMainWindow):
                          f'占用 {human_size(hs.get("junk_bytes", 0))}')
         if hs.get('old_versions'):
             lines.append(f'· 旧版本 {hs["old_versions"]} 个 → 「旧版本」')
+        if summary.get('projects'):
+            lines.append(f'· {summary["projects"]} 个代码/工程目录已整体保留,'
+                         f'内部结构未打散')
         if summary.get('empty_dirs'):
             lines.append(f'· 清理空文件夹 {summary["empty_dirs"]} 个')
         if summary.get('failed'):

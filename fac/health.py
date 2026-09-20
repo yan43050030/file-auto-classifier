@@ -12,6 +12,9 @@ from .filetypes import junk_reason, strip_copy_markers, is_copy_like
 
 _PARTIAL_BYTES = 64 * 1024      # 大文件先比前 64KB,不同就不必读全文
 _PARTIAL_MIN = 1 << 20          # 超过 1MB 才走"先partial后全量"两段式
+# 低于此体积不参与查重:小配置/小模板/占位文件内容相同是常态,
+# 判成"重复"省不下空间,误伤却很高
+DEFAULT_MIN_DUP_SIZE = 10 * 1024
 
 
 def _hash_file(path, limit=None):
@@ -31,19 +34,28 @@ def _hash_file(path, limit=None):
     return h.hexdigest()
 
 
-def find_duplicates(files, log=None, cancel=None):
+def find_duplicates(files, log=None, cancel=None,
+                    min_size=DEFAULT_MIN_DUP_SIZE):
     """找出内容完全相同的文件组。
 
     files: [(path, size), …]
+    min_size: 小于此体积的文件不参与查重(默认 10KB,传 0 表示不限)
     返回 [[path, …], …],每组按"建议保留的排在第一个"排序。
     先按大小分组,只对可疑组做哈希;大文件再用前 64KB 预筛,避免全盘读取。
     """
-    by_size = {}
+    by_size, skipped_small = {}, 0
     for path, size in files:
-        if size > 0:
-            by_size.setdefault(size, []).append(path)
+        if size <= 0:
+            continue
+        if size < (min_size or 0):
+            skipped_small += 1
+            continue
+        by_size.setdefault(size, []).append(path)
     candidates = [(sz, paths) for sz, paths in by_size.items() if len(paths) > 1]
     if not candidates:
+        if log and skipped_small:
+            log(f'[体检] 未发现重复文件(已跳过 {skipped_small} 个'
+                f'小于 {human_size(min_size)} 的小文件)')
         return []
 
     groups = []
@@ -79,8 +91,10 @@ def find_duplicates(files, log=None, cancel=None):
                 wasted += os.path.getsize(long_path(g[0])) * (len(g) - 1)
             except OSError:
                 pass
+        tail = (f';已跳过 {skipped_small} 个小于 {human_size(min_size)} 的小文件'
+                if skipped_small else '')
         log(f'[体检] 发现 {len(groups)} 组重复文件,'
-            f'重复占用约 {human_size(wasted)}')
+            f'重复占用约 {human_size(wasted)}{tail}')
     return groups
 
 

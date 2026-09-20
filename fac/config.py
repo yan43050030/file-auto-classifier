@@ -39,6 +39,9 @@ DEFAULTS = {
     'org_smart_date': True,
     'org_scan_only': False,
     'org_extract': False,
+    'org_keep_proj': True,
+    'org_hidden': False,
+    'org_min_dup_kb': 10,
 }
 
 

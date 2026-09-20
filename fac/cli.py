@@ -95,6 +95,16 @@ def build_parser():
                    help='整理完把该体检文件夹里的文件删到回收站(可重复;all=全部)')
     g.add_argument('--extract-archives', action='store_true',
                    help='顺带解开压缩包,把里面的文件也一起整理(压缩包本身仍归档)')
+    g.add_argument('--no-keep-projects', action='store_true',
+                   help='不保护代码/工程目录(默认会把含 .git/package.json/'
+                        'requirements.txt 等标志的目录整体搬运,不打散)')
+    g.add_argument('--min-dup-kb', type=int, default=10, metavar='KB',
+                   help='查重最小体积(KB),默认 10;小于此体积的文件不查重,'
+                        '避免空模板/配置文件被误判为重复。0=不限')
+    g.add_argument('--include-hidden', action='store_true',
+                   help='把隐藏文件(以 . 开头)也纳入整理')
+    g.add_argument('--flat-buckets', action='store_true',
+                   help='「重复文件/旧版本」桶内不再按原目录名分层(默认分层便于核对)')
     g.add_argument('--history', metavar='关键字',
                    help='在结果目录的整理历史里搜索文件(需配合 -o 指定目录)')
     g.add_argument('--rule', action='append', default=[], metavar='类型:值:目标',
@@ -162,6 +172,10 @@ def _run_organize(args):
         date_source='mtime' if args.date_mtime else 'auto',
         scan_only=args.scan_only,
         extract_archives=args.extract_archives,
+        keep_projects=not args.no_keep_projects,
+        min_dup_size=max(0, args.min_dup_kb) * 1024,
+        skip_hidden=not args.include_hidden,
+        keep_origin_dir=not args.flat_buckets,
         purge=(['可清理', '重复文件', '旧版本'] if 'all' in args.purge
                else args.purge))
     result = {}

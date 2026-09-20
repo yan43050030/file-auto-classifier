@@ -122,6 +122,13 @@ _JUNK_SUFFIXES = ('.tmp', '.temp', '.bak', '.old', '.chk', '.gid',
                   '.crdownload', '.part', '.download', '.!ut')
 _JUNK_PREFIXES = ('~$', '.~lock.')
 
+# 这些空文件是有意义的(Python 包标记、占位文件等),不能当垃圾清掉
+_MEANINGFUL_EMPTY = {
+    '__init__.py', 'py.typed', '.gitkeep', '.keep', '.placeholder',
+    '.gitignore', '.npmignore', '.dockerignore', '.gitattributes',
+    '.gitmodules', '.env', '.nojekyll', 'index.html', '__init__.pyi',
+}
+
 
 def junk_reason(fname: str, size: int = -1):
     """判断是否是可清理的垃圾/临时文件。返回原因字符串,不是则返回 None。"""
@@ -133,8 +140,9 @@ def junk_reason(fname: str, size: int = -1):
     if low.endswith(_JUNK_SUFFIXES):
         if low.endswith(('.crdownload', '.part', '.download', '.!ut')):
             return '未完成的下载'
-        return '临时/备份文件'
-    if size == 0:
+        # 注意:原因会被当成文件夹名,不能含 '/'
+        return '临时或备份文件'
+    if size == 0 and low not in _MEANINGFUL_EMPTY:
         return '空文件(0 字节)'
     return None
 
