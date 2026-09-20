@@ -18,15 +18,18 @@ from .filetypes import categorize, detect_source, ext_of
 from .filedate import best_date
 from .rules import match_rules
 from . import health
+from .health import _safe_mtime
 from .undo import Journal, default_journal_path
 from .report import write_organize_report
 from . import history
+from . import project as proj
 
 # 体检专用文件夹(优先级高于常规布局)
 BUCKET_JUNK = '可清理'
 BUCKET_DUP = '重复文件'
 BUCKET_OLD = '旧版本'
 BUCKET_LARGE = '大文件'
+BUCKET_PROJECT = proj.BUCKET_PROJECT
 
 LAYOUT_PRESETS = [
     ('{类别}', '只按类型(文档/图片/视频…)'),
@@ -58,7 +61,10 @@ class OrganizeOptions:
                  date_source='auto',       # auto=拍摄/文件名日期优先 | mtime
                  scan_only=False,          # 只体检出报告,不移动任何文件
                  purge=None,               # 完成后删到回收站的桶名集合
-                 extract_archives=False):  # 先把压缩包解开再一起整理
+                 extract_archives=False,   # 先把压缩包解开再一起整理
+                 keep_projects=True,       # 代码/工程目录整体保留不打散
+                 min_dup_size=None,        # 查重最小体积(None=用默认 10KB)
+                 keep_origin_dir=True):    # 体检桶里保留原目录名一层,便于核对
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.layout = layout or '{类别}/{年}'
@@ -78,6 +84,10 @@ class OrganizeOptions:
         # 可选值:'可清理' / '重复文件' / '旧版本'
         self.purge = set(purge or ())
         self.extract_archives = extract_archives
+        self.keep_projects = keep_projects
+        self.min_dup_size = (health.DEFAULT_MIN_DUP_SIZE
+                             if min_dup_size is None else int(min_dup_size))
+        self.keep_origin_dir = keep_origin_dir
 
 
 class OrganizeItem:
@@ -88,11 +98,11 @@ class OrganizeItem:
                  'date', 'from_archive')
 
     def __init__(self, src, fname, unit, targets, via, size=0, date=0.0,
-                 from_archive=False):
+                 from_archive=False, action='place'):
         self.src = src
         self.fname = fname
         self.unit = unit          # 来源:原目录名(或识别出的微信/截图等)
-        self.action = 'place'
+        self.action = action      # place=单个文件 | project=整个项目目录
         self.targets = targets    # 相对目标路径列表,如 ['文档/2023']
         self.via = via            # 分类依据
         self.size = size
@@ -100,6 +110,8 @@ class OrganizeItem:
         self.from_archive = from_archive   # 解压产生的新文件
 
     def display_target(self):
+        if self.action == 'project':
+            return '整体保留 → ' + '、'.join(self.targets)
         return '、'.join(self.targets)
 
 
@@ -146,11 +158,13 @@ def render_layout(layout: str, fname: str, mtime: float, source=None,
 
 # ---------- 收集文件 ----------
 
-def collect_files(inputs, out_dir, skip_hidden=True, log=None):
+def collect_files(inputs, out_dir, skip_hidden=True, log=None,
+                  project_roots=None):
     """遍历输入目录收集文件。返回 [(path, size, mtime), …]。
 
     整理结果目录本身会被跳过(除非它就是输入目录 —— 即"原地整理")。"""
     out_abs = os.path.abspath(out_dir)
+    project_roots = set(project_roots or ())
     in_roots = {os.path.abspath(p) for p in inputs}
     in_place = out_abs in in_roots        # 原地整理:不能把输出目录整个跳过
     files, seen = [], set()
@@ -172,6 +186,9 @@ def collect_files(inputs, out_dir, skip_hidden=True, log=None):
             if not in_place and (root_abs == out_abs or
                                  root_abs.startswith(out_abs + os.sep)):
                 dirs[:] = []
+                continue
+            if root_abs in project_roots:
+                dirs[:] = []          # 项目目录整体搬运,内部不逐个收集
                 continue
             if skip_hidden:
                 dirs[:] = [d for d in dirs if not d.startswith('.')]
@@ -201,7 +218,7 @@ def _add(files, seen, path):
 # ---------- 生成整理计划 ----------
 
 def build_plan(files, opts, log=None, cancel=None, progress=None,
-               from_archive=None):
+               from_archive=None, projects=None):
     """from_archive: {解压出的文件路径: 来源压缩包名},用于正确标注来源。"""
     """体检 + 分类,生成整理计划。返回 (plan, health_stats)。"""
     hs = {'dup_groups': 0, 'dup_extra': 0, 'dup_bytes': 0,
@@ -210,6 +227,13 @@ def build_plan(files, opts, log=None, cancel=None, progress=None,
 
     size_pairs = [(p, s) for p, s, _m in files]
     special = {}      # path -> (bucket相对路径, via)
+
+    def _bucket(bucket, path):
+        """体检桶里再分一层原目录名,方便核对文件是从哪来的。"""
+        if not opts.keep_origin_dir:
+            return bucket
+        d = os.path.basename(os.path.dirname(path))
+        return os.path.join(bucket, d) if d else bucket
 
     if opts.find_junk:
         for p, reason in health.find_junk(size_pairs, log=log):
@@ -220,7 +244,8 @@ def build_plan(files, opts, log=None, cancel=None, progress=None,
     if opts.find_dup:
         if progress:
             progress('health', 1, 3)
-        groups = health.find_duplicates(size_pairs, log=log, cancel=cancel)
+        groups = health.find_duplicates(size_pairs, log=log, cancel=cancel,
+                                        min_size=opts.min_dup_size)
         hs['dup_groups'] = len(groups)
         for g in groups:
             keep = g[0]
@@ -231,7 +256,7 @@ def build_plan(files, opts, log=None, cancel=None, progress=None,
             for dup in g[1:]:
                 if dup in special:
                     continue
-                special[dup] = (BUCKET_DUP,
+                special[dup] = (_bucket(BUCKET_DUP, dup),
                                 f'体检:与「{os.path.basename(keep)}」重复')
                 hs['dup_extra'] += 1
                 hs['dup_bytes'] += per
@@ -247,7 +272,7 @@ def build_plan(files, opts, log=None, cancel=None, progress=None,
                 continue
             newest = rest[0]
             for old in rest[1:]:
-                special[old] = (BUCKET_OLD,
+                special[old] = (_bucket(BUCKET_OLD, old),
                                 f'体检:旧版本(最新为「{os.path.basename(newest)}」)')
                 hs['old_versions'] += 1
 
@@ -257,6 +282,15 @@ def build_plan(files, opts, log=None, cancel=None, progress=None,
     plan = []
     date_stats = {}
     from_archive = from_archive or {}
+
+    # 项目/工程目录:整体一个条目,内部结构原样保留
+    for root, (kind, n_files, total) in sorted((projects or {}).items()):
+        plan.append(OrganizeItem(
+            root, os.path.basename(root), kind,
+            [os.path.join(BUCKET_PROJECT, safe_rel_path(kind))],
+            f'项目:{kind}({n_files} 个文件)', total,
+            _safe_mtime(root), False, action='project'))
+
     for i, (path, size, mtime) in enumerate(files, 1):
         if cancel is not None and cancel.is_set():
             raise Cancelled
@@ -350,10 +384,14 @@ def run_organize(opts: OrganizeOptions, log, progress,
         # ---- 1. 扫描 ----
         tee('开始扫描文件...')
         progress('scan', 0, 1)
+        projects = {}
+        if opts.keep_projects:
+            projects = proj.find_projects(opts.inputs, opts.out_dir, log=tee)
         files = collect_files(opts.inputs, opts.out_dir,
-                              skip_hidden=opts.skip_hidden, log=tee)
+                              skip_hidden=opts.skip_hidden, log=tee,
+                              project_roots=set(projects))
         progress('scan', 1, 1)
-        if not files:
+        if not files and not projects:
             tee('未找到任何文件。请检查所选路径。')
             return
         tee(f'共发现 {len(files)} 个文件,'
@@ -370,7 +408,8 @@ def run_organize(opts: OrganizeOptions, log, progress,
         # ---- 2. 体检 + 生成计划 ----
         tee('开始文件体检与分类...')
         plan, hs = build_plan(files, opts, log=tee, cancel=cancel_event,
-                              progress=progress, from_archive=from_archive)
+                              progress=progress, from_archive=from_archive,
+                              projects=projects)
         summary['health'] = hs
         ck()
 
@@ -423,6 +462,25 @@ def run_organize(opts: OrganizeOptions, log, progress,
             rel = safe_rel_path(item.targets[0]) if item.targets else '未分类'
             folder = os.path.join(opts.out_dir, rel)
             try:
+                if item.action == 'project':
+                    os.makedirs(long_path(folder), exist_ok=True)
+                    dst = unique_path(folder, item.fname)
+                    if os.path.abspath(item.src) == os.path.abspath(dst):
+                        continue
+                    if move:
+                        shutil.move(long_path(item.src), long_path(dst))
+                        journal.record('move', item.src, dst)
+                        summary['moved'] += 1
+                    else:
+                        shutil.copytree(item.src, dst)
+                        journal.record('copy_tree', item.src, dst)
+                        summary['copied'] += 1
+                    stats[rel] = stats.get(rel, 0) + 1
+                    summary['files'] += 1
+                    summary['projects'] = summary.get('projects', 0) + 1
+                    index_rows.append((item.fname, item.src, dst, item.size,
+                                       rel, item.via))
+                    continue
                 os.makedirs(long_path(folder), exist_ok=True)
                 # 先判断是否已在目标位置:否则 unique_path 会因为"目标名被
                 # 文件自己占着"而加序号,重复整理同一目录时不断产生 (1)(2)
@@ -471,6 +529,9 @@ def run_organize(opts: OrganizeOptions, log, progress,
         # ---- 6. 汇总 + 整理报告 ----
         tee(f'\n整理完成!共处理 {summary["files"]} 个文件'
             f'({"移动" if move else "复制"} {summary["moved"] or summary["copied"]} 个)。')
+        if summary.get('projects'):
+            tee(f'{summary["projects"]} 个项目/工程目录已整体保留在'
+                f'「{BUCKET_PROJECT}」下(内部结构未打散)。')
         if hs['dup_extra']:
             tee(f'重复文件 {hs["dup_extra"]} 个已归入「{BUCKET_DUP}」,'
                 f'确认后删除可省出 {health.human_size(hs["dup_bytes"])}。')

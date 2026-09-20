@@ -92,8 +92,10 @@ def read_journal(path):
 def undo(path, log=print, cancel=None):
     """按台账把文件还原回原位置。倒序执行,返回统计字典。
 
-    - move: 把 dst 移回 src(src 已被占用时自动加序号,绝不覆盖)
+    - move: 把 dst 移回 src(src 已被占用时自动加序号,绝不覆盖;
+            整个项目目录也走这条)
     - copy: 删除 dst(原件本就没动)
+    - copy_tree: 删除复制出来的整个目录
     - rmdir: 重建被删掉的空文件夹
     """
     meta, ops = read_journal(path)
@@ -124,6 +126,12 @@ def undo(path, log=print, cancel=None):
             elif op == 'copy':
                 if os.path.exists(long_path(dst)):
                     os.remove(long_path(dst))
+                    stats['removed'] += 1
+                else:
+                    stats['missing'] += 1
+            elif op == 'copy_tree':
+                if os.path.isdir(long_path(dst)):
+                    shutil.rmtree(long_path(dst), ignore_errors=True)
                     stats['removed'] += 1
                 else:
                     stats['missing'] += 1

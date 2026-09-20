@@ -116,3 +116,36 @@ def test_undo_without_journal_warns(win, tmp_path, monkeypatch):
     win.txt_out.setText(str(out))
     win._undo_last()
     assert shown and '台账' in shown[-1]
+
+
+def test_organize_new_options_from_ui(win, tmp_path):
+    """V4.2 新增选项能正确读进 OrganizeOptions。"""
+    win.cmb_mode.setCurrentIndex(1)
+    win._ckg['org_keep_proj'].setChecked(True)
+    win._ckg['org_hidden'].setChecked(True)
+    win.spin_mindup.setValue(256)
+    opts = win._organize_opts(str(tmp_path / 'out'))
+    assert opts.keep_projects is True
+    assert opts.skip_hidden is False          # 勾了"包含隐藏文件"
+    assert opts.min_dup_size == 256 * 1024
+
+    win._ckg['org_keep_proj'].setChecked(False)
+    win._ckg['org_hidden'].setChecked(False)
+    win.spin_mindup.setValue(0)
+    opts = win._organize_opts(str(tmp_path / 'out'))
+    assert opts.keep_projects is False
+    assert opts.skip_hidden is True
+    assert opts.min_dup_size == 0             # 0 = 不限
+
+
+def test_min_dup_config_roundtrip(win):
+    win.cmb_mode.setCurrentIndex(1)
+    win.spin_mindup.setValue(64)
+    win._ckg['org_keep_proj'].setChecked(False)
+    cfg = win._gather_cfg()
+    assert cfg['org_min_dup_kb'] == 64
+    assert cfg['org_keep_proj'] is False
+    win.spin_mindup.setValue(10)
+    win._apply_cfg(cfg)
+    assert win.spin_mindup.value() == 64
+    assert win._ckg['org_keep_proj'].isChecked() is False

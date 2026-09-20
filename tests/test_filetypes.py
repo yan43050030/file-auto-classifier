@@ -48,10 +48,13 @@ def test_junk_reason():
     assert junk_reason('.DS_Store') == '系统缓存文件'
     assert junk_reason('desktop.ini') == '系统缓存文件'
     assert junk_reason('~$报告.docx') == 'Office 临时文件'
-    assert junk_reason('数据.tmp') == '临时/备份文件'
+    assert junk_reason('数据.tmp') == '临时或备份文件'   # 不能含 '/',会变成目录层级
     assert junk_reason('片子.mp4.crdownload') == '未完成的下载'
     assert junk_reason('正常文件.docx', 1024) is None
     assert junk_reason('空文件.docx', 0) == '空文件(0 字节)'
+    # 有意义的空文件不算垃圾
+    assert junk_reason('__init__.py', 0) is None
+    assert junk_reason('.gitkeep', 0) is None
 
 
 def test_strip_copy_markers():
