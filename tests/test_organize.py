@@ -537,3 +537,61 @@ def test_junk_reason_has_no_slash(tmp_path):
     run(OrganizeOptions([str(src)], str(out), preview=False))
     assert (out / BUCKET_JUNK / '临时或备份文件' / '临时.tmp').exists()
     assert not (out / BUCKET_JUNK / '临时').is_dir()
+
+
+def test_reorganize_project_is_idempotent(tmp_path):
+    """原地重复整理时,项目不能被反复重命名成 proj(1)(1)。"""
+    src = tmp_path / 'src'
+    mk(src / 'proj' / 'package.json', b'{}')
+    mk(src / 'proj' / 'app.js', b'js')
+    mk(src / '文档.docx', b'D' * 20000)
+    out = tmp_path / 'out'
+    run(OrganizeOptions([str(src)], str(out), preview=False))
+    snap = lambda: sorted(str(p.relative_to(out)) for p in out.rglob('*')
+                          if p.is_file() and not p.name.startswith(('整理', '分类')))
+    s1 = snap()
+    _l, r2 = run(OrganizeOptions([str(out)], str(out), preview=False))
+    _l, r3 = run(OrganizeOptions([str(out)], str(out), preview=False))
+    assert snap() == s1
+    assert r2['moved'] == 0 and r3['moved'] == 0
+    assert r2.get('projects') == 1          # 仍被识别为项目(没被打散)
+
+
+def test_weak_marker_folder_not_treated_as_project(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '编译笔记' / 'Makefile', b'all:\n')
+    mk(src / '编译笔记' / '笔记.docx', b'D' * 20000)
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert not r.get('projects')
+    assert (out / '文档' / '2024' / '笔记.docx').exists()
+
+
+def test_project_inner_duplicates_not_flagged(tmp_path):
+    """项目内部的重复文件不参与查重(项目整体保留,内部不收集)。"""
+    src = tmp_path / 'src'
+    big = b'SAME' * 20000
+    mk(src / 'proj' / 'go.mod', b'module x')
+    mk(src / 'proj' / 'a' / 'data.bin', big)
+    mk(src / 'proj' / 'b' / 'data.bin', big)
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert r['health']['dup_extra'] == 0
+    proj_dir = out / '项目' / 'Go 项目' / 'proj'
+    assert (proj_dir / 'a' / 'data.bin').exists()
+    assert (proj_dir / 'b' / 'data.bin').exists()
+
+
+def test_same_named_projects_do_not_collide(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '甲' / 'proj' / 'go.mod', b'module a')
+    mk(src / '甲' / 'proj' / 'a.go', b'package a')
+    mk(src / '乙' / 'proj' / 'go.mod', b'module b')
+    mk(src / '乙' / 'proj' / 'b.go', b'package b')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert r.get('projects') == 2
+    dirs = sorted(p.name for p in (out / '项目' / 'Go 项目').iterdir())
+    assert dirs == ['proj', 'proj(1)']
+    assert list((out / '项目' / 'Go 项目').rglob('a.go'))
+    assert list((out / '项目' / 'Go 项目').rglob('b.go'))
