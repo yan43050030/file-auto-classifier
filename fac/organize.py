@@ -464,9 +464,15 @@ def run_organize(opts: OrganizeOptions, log, progress,
             try:
                 if item.action == 'project':
                     os.makedirs(long_path(folder), exist_ok=True)
-                    dst = unique_path(folder, item.fname)
-                    if os.path.abspath(item.src) == os.path.abspath(dst):
+                    # 与单文件同理:先判断是否已在目标位置,否则 unique_path
+                    # 会因为目标名被自己占着而不断加 (1),重复整理越加越多
+                    if os.path.abspath(item.src) == \
+                            os.path.abspath(os.path.join(folder, item.fname)):
+                        stats[rel] = stats.get(rel, 0) + 1
+                        summary['files'] += 1
+                        summary['projects'] = summary.get('projects', 0) + 1
                         continue
+                    dst = unique_path(folder, item.fname)
                     if move:
                         shutil.move(long_path(item.src), long_path(dst))
                         journal.record('move', item.src, dst)

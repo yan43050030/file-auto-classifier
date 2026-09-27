@@ -73,3 +73,57 @@ def test_is_inside(tmp_path):
     inside = os.path.join(root, 'src', 'main.py')
     assert proj.is_inside(inside, [root]) == root
     assert proj.is_inside(str(tmp_path / '别的.txt'), [root]) == ''
+
+
+# ---------- 弱标志:需同时有源码才算项目 ----------
+
+def test_weak_marker_needs_source_code():
+    # 资料文件夹里恰好放着 Makefile 教程,不该被整体搬走
+    assert marker_of_entries(['Makefile', '笔记.docx', '截图.png']) is None
+    assert marker_of_entries(['Dockerfile', '说明.pdf']) is None
+    assert marker_of_entries(['CMakeLists.txt', '教程.mp4']) is None
+    # 同目录有源码才算真工程
+    assert marker_of_entries(['Makefile', 'main.c', 'util.h']) == '工程目录'
+    assert marker_of_entries(['Dockerfile', 'app.py']) == '容器项目'
+    assert marker_of_entries(['CMakeLists.txt', 'lib.cpp']) == 'CMake 项目'
+
+
+def test_strong_marker_needs_no_source():
+    # 强标志单独出现即可认定
+    assert marker_of_entries(['package.json', 'readme.txt']) == 'Node 项目'
+    assert marker_of_entries(['.git', '资料.pdf']) == 'Git 仓库'
+    assert marker_of_entries(['go.mod']) == 'Go 项目'
+
+
+def marker_of_entries(entries):
+    """用给定的目录条目列表直接判定(不落盘)。"""
+    return proj.marker_of('/不存在的路径', entries)
+
+
+def test_inplace_project_detection(tmp_path):
+    # 原地整理(输出目录==输入目录)时,项目识别不能被"排除输出目录"关掉,
+    # 否则已保护好的项目会在下次整理时被打散
+    root = mkproj(tmp_path, 'app', 'package.json')
+    found = proj.find_projects([str(tmp_path)], out_dir=str(tmp_path))
+    assert os.path.abspath(root) in found
+
+
+def test_out_dir_excluded_when_separate(tmp_path):
+    # 输出目录独立(不在输入里)时,其中已整理好的项目不再重复处理
+    src = tmp_path / 'src'
+    out = tmp_path / 'out'
+    src.mkdir()
+    mkproj(out, 'already', 'package.json')
+    mkproj(src, 'new', 'go.mod')
+    found = proj.find_projects([str(src)], out_dir=str(out))
+    assert {os.path.basename(p) for p in found} == {'new'}
+
+
+def test_out_dir_under_input_is_excluded(tmp_path):
+    # 输出目录是输入的子目录时也要排除,否则会把上次的成果再翻一遍
+    src = tmp_path / 'src'
+    out = src / '整理结果'
+    mkproj(src, 'new', 'go.mod')
+    mkproj(out, 'already', 'package.json')
+    found = proj.find_projects([str(src)], out_dir=str(out))
+    assert {os.path.basename(p) for p in found} == {'new'}
