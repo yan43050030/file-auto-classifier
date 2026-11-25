@@ -35,11 +35,12 @@ def _hash_file(path, limit=None):
 
 
 def find_duplicates(files, log=None, cancel=None,
-                    min_size=DEFAULT_MIN_DUP_SIZE):
+                    min_size=DEFAULT_MIN_DUP_SIZE, avoid_keep=None):
     """找出内容完全相同的文件组。
 
     files: [(path, size), …]
     min_size: 小于此体积的文件不参与查重(默认 10KB,传 0 表示不限)
+    avoid_keep: 尽量不选作"保留"的路径集合(如解压出来的临时文件)
     返回 [[path, …], …],每组按"建议保留的排在第一个"排序。
     先按大小分组,只对可疑组做哈希;大文件再用前 64KB 预筛,避免全盘读取。
     """
@@ -82,7 +83,7 @@ def find_duplicates(files, log=None, cancel=None,
                     continue
         for _digest, same in buckets.items():
             if len(same) > 1:
-                groups.append(_rank_keep_first(same))
+                groups.append(_rank_keep_first(same, avoid_keep))
 
     if log and groups:
         wasted = 0
@@ -98,16 +99,18 @@ def find_duplicates(files, log=None, cancel=None,
     return groups
 
 
-def _rank_keep_first(paths):
-    """决定重复组里保留哪一个:名字不像副本的优先,其次改动时间早的(原件),
-    再次路径短的(通常在更上层的正式目录)。"""
+def _rank_keep_first(paths, avoid_keep=None):
+    """决定重复组里保留哪一个:用户原本就有的文件优先(解压出来的排后),
+    其次名字不像副本的,再次改动时间早的(原件),最后路径短的(通常在更上层的正式目录)。"""
+    avoid_keep = avoid_keep or ()
+
     def key(p):
         name = os.path.basename(p)
         try:
             mtime = os.path.getmtime(long_path(p))
         except OSError:
             mtime = float('inf')
-        return (is_copy_like(name), mtime, len(p), p)
+        return (p in avoid_keep, is_copy_like(name), mtime, len(p), p)
     return sorted(paths, key=key)
 
 

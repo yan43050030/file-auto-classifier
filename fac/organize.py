@@ -219,8 +219,9 @@ def _add(files, seen, path):
 
 def build_plan(files, opts, log=None, cancel=None, progress=None,
                from_archive=None, projects=None):
-    """from_archive: {解压出的文件路径: 来源压缩包名},用于正确标注来源。"""
-    """体检 + 分类,生成整理计划。返回 (plan, health_stats)。"""
+    """体检 + 分类,生成整理计划。返回 (plan, health_stats)。
+
+    from_archive: {解压出的文件路径: 来源压缩包名},用于正确标注来源。"""
     hs = {'dup_groups': 0, 'dup_extra': 0, 'dup_bytes': 0,
           'junk': 0, 'junk_bytes': 0, 'old_versions': 0,
           'large': 0, 'total_bytes': sum(s for _p, s, _m in files)}
@@ -244,8 +245,11 @@ def build_plan(files, opts, log=None, cancel=None, progress=None,
     if opts.find_dup:
         if progress:
             progress('health', 1, 3)
+        # 解压出来的文件不优先当"原件"保留:它们常带压缩包里更早的时间,
+        # 否则用户原本散放的那份反而会被挪进「重复文件」
         groups = health.find_duplicates(size_pairs, log=log, cancel=cancel,
-                                        min_size=opts.min_dup_size)
+                                        min_size=opts.min_dup_size,
+                                        avoid_keep=set(from_archive or ()))
         hs['dup_groups'] = len(groups)
         for g in groups:
             keep = g[0]
@@ -399,7 +403,7 @@ def run_organize(opts: OrganizeOptions, log, progress,
         ck()
 
         # ---- 1b. 可选:先把压缩包解开,内容物一并参与整理 ----
-        from_archive = set()
+        from_archive = {}
         if opts.extract_archives and not opts.scan_only:
             files, from_archive, tmp_extract = _extract_archives(
                 files, opts, tee, ask_password, cancel_event)
@@ -463,7 +467,7 @@ def run_organize(opts: OrganizeOptions, log, progress,
             folder = os.path.join(opts.out_dir, rel)
             try:
                 if item.action == 'project':
-                    os.makedirs(long_path(folder), exist_ok=True)
+                    _ensure_dir(folder, journal)
                     # 与单文件同理:先判断是否已在目标位置,否则 unique_path
                     # 会因为目标名被自己占着而不断加 (1),重复整理越加越多
                     if os.path.abspath(item.src) == \
@@ -487,7 +491,7 @@ def run_organize(opts: OrganizeOptions, log, progress,
                     index_rows.append((item.fname, item.src, dst, item.size,
                                        rel, item.via))
                     continue
-                os.makedirs(long_path(folder), exist_ok=True)
+                _ensure_dir(folder, journal)
                 # 先判断是否已在目标位置:否则 unique_path 会因为"目标名被
                 # 文件自己占着"而加序号,重复整理同一目录时不断产生 (1)(2)
                 if os.path.abspath(item.src) == \
@@ -530,7 +534,10 @@ def run_organize(opts: OrganizeOptions, log, progress,
 
         # ---- 5b. 可选:把体检挑出来的文件删到回收站 ----
         if opts.purge:
-            summary['purged'] = _purge_buckets(opts, tee, cancel_event)
+            # 只清理本次整理放进体检桶的文件,并补记进本次台账
+            summary['purged'] = _purge_buckets(
+                opts, tee, cancel_event, journal_paths=[journal.path],
+                writers={journal.path: journal})
 
         # ---- 6. 汇总 + 整理报告 ----
         tee(f'\n整理完成!共处理 {summary["files"]} 个文件'
@@ -589,38 +596,38 @@ def run_organize(opts: OrganizeOptions, log, progress,
             done_cb(summary)
 
 
-def _purge_buckets(opts: OrganizeOptions, tee, cancel_event):
-    """把指定体检文件夹(可清理/重复文件/旧版本)里的文件删到回收站。
+def _ensure_dir(folder, journal):
+    """建目标文件夹,并把新建的每一层记进台账(op=mkdir),
+    撤销时据此删掉空了的分类目录,不留一地空文件夹。"""
+    lp = long_path(folder)
+    if os.path.isdir(lp):
+        return
+    created, cur = [], os.path.abspath(folder)
+    while cur and not os.path.isdir(long_path(cur)):
+        created.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    os.makedirs(lp, exist_ok=True)
+    if journal is not None:
+        for d in reversed(created):         # 从外到内记,撤销时倒序先删内层
+            journal.record('mkdir', d, '')
 
-    只删这几个由工具自己归集出来的文件夹,不碰其他分类结果;
-    删完顺手移除空掉的桶目录。返回删除的文件数。"""
-    from .util import delete_to_trash
-    n = 0
-    for bucket in sorted(opts.purge):
-        base = os.path.join(opts.out_dir, bucket)
-        if not os.path.isdir(base):
-            continue
-        tee(f'开始清理「{bucket}」...')
-        for root, _dirs, files in os.walk(base, topdown=False):
-            for f in files:
-                if cancel_event is not None and cancel_event.is_set():
-                    tee('  清理已中断。')
-                    return n
-                fp = os.path.join(root, f)
-                try:
-                    way = delete_to_trash(fp)
-                    n += 1
-                    if n <= 20:
-                        tee(f'  已删除({way}): {f}')
-                except Exception as e:
-                    tee(f'  [提示] 删除失败 {f}: {e}')
-            try:
-                if root != base or not os.listdir(base):
-                    os.rmdir(long_path(root))
-            except OSError:
-                pass
-        if n > 20:
-            tee(f'  …共删除 {n} 个文件(仅列出前 20 个)')
+
+def _purge_buckets(opts: OrganizeOptions, tee, cancel_event,
+                   journal_paths=None, writers=None):
+    """把体检文件夹(可清理/重复文件/旧版本)里**由本工具放进去**的文件删到回收站。
+
+    范围以整理台账为准(见 fac/purge.py),不碰用户自己放进去的东西;
+    每删一个都补记台账。返回删除的文件数。"""
+    from . import purge as pg
+    targets = [b for b in pg.BUCKETS if b in opts.purge]
+    if not targets:
+        return 0
+    tee(f'开始清理「{"、".join(targets)}」...')
+    n, _freed = pg.purge(opts.out_dir, targets, tee, cancel_event,
+                         journal_paths=journal_paths, writers=writers)
     return n
 
 

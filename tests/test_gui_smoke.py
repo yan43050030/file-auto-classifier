@@ -149,3 +149,18 @@ def test_min_dup_config_roundtrip(win):
     win._apply_cfg(cfg)
     assert win.spin_mindup.value() == 64
     assert win._ckg['org_keep_proj'].isChecked() is False
+
+
+def test_purge_ignores_user_files_in_bucket(win, tmp_path, monkeypatch):
+    """一键清理只看台账:输出目录里只有用户自己放的「重复文件」时,提示无可删。"""
+    from PySide6.QtWidgets import QMessageBox
+    shown = []
+    monkeypatch.setattr(QMessageBox, 'information',
+                        lambda *a, **k: shown.append(a[-1]))
+    out = tmp_path / 'out'
+    (out / '重复文件').mkdir(parents=True)
+    (out / '重复文件' / '我的.txt').write_text('mine')
+    win.txt_out.setText(str(out))
+    win._purge_now()
+    assert shown and '没有' in shown[-1]
+    assert (out / '重复文件' / '我的.txt').exists()

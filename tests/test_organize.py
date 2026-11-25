@@ -595,3 +595,84 @@ def test_same_named_projects_do_not_collide(tmp_path):
     assert dirs == ['proj', 'proj(1)']
     assert list((out / '项目' / 'Go 项目').rglob('a.go'))
     assert list((out / '项目' / 'Go 项目').rglob('b.go'))
+
+
+# ---------- V4.3:撤销清空目录 / 清理范围与台账 / 解压文件不抢"原件" ----------
+
+def test_undo_removes_created_empty_dirs_but_keeps_existing(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '报告.docx', b'A', Y2023)
+    mk(src / '照片.jpg', b'B', Y2024)
+    out = tmp_path / 'out'
+    (out / '我的旧目录').mkdir(parents=True)          # 整理前就存在的空目录
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert (out / '文档' / '2023' / '报告.docx').exists()
+    stats = undo_mod.undo(r['journal'], log=lambda m: None)
+    assert (src / '报告.docx').exists() and (src / '照片.jpg').exists()
+    assert not (out / '文档').exists() and not (out / '图片').exists()
+    assert stats['dirs_removed'] >= 4
+    assert (out / '我的旧目录').is_dir()               # 不是本工具建的,不删
+
+
+def test_purge_only_touches_files_placed_by_tool(tmp_path):
+    from fac import purge as pg
+    src = tmp_path / 'src'
+    mk(src / '资料.pdf', b'SAME' * 5000, Y2023)
+    mk(src / 'sub' / '资料副本.pdf', b'SAME' * 5000, Y2024)
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    mine = mk(out / BUCKET_DUP / '我自己放的.pdf', b'MINE')   # 用户自己放进去的
+    cands = pg.collect_candidates(str(out), pg.BUCKETS)
+    assert [os.path.basename(c['path']) for c in cands] == ['资料副本.pdf']
+    n, freed = pg.purge(str(out), [BUCKET_DUP], lambda m: None)
+    assert n == 1 and freed == 20000
+    assert os.path.exists(mine)                        # 不碰用户的文件
+    # 清理已补记台账:撤销时提示"在回收站",而不是算作"找不到"
+    _meta, ops = undo_mod.read_journal(r['journal'])
+    assert any(o['op'] == 'trash' for o in ops)
+    logs = []
+    stats = undo_mod.undo(r['journal'], log=logs.append)
+    assert stats['trashed'] == 1 and stats['missing'] == 0
+    assert any('回收站' in m for m in logs)
+    assert (src / '资料.pdf').exists()
+    # 已清理过的不会再次成为候选
+    assert pg.collect_candidates(str(out), pg.BUCKETS) == []
+
+
+def test_purge_in_run_records_trash(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / 'Thumbs.db', b'J')
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False,
+                                   purge=[BUCKET_JUNK]))
+    assert r['purged'] == 1
+    _meta, ops = undo_mod.read_journal(r['journal'])
+    assert [o['op'] for o in ops].count('trash') == 1
+
+
+def test_find_duplicates_avoid_keep_extracted():
+    from fac.health import find_duplicates
+    import tempfile
+    d = tempfile.mkdtemp()
+    orig = mk(os.path.join(d, 'mine', '合同.pdf'), b'Z' * 20000, Y2024)
+    extr = mk(os.path.join(d, 'tmp', '合同.pdf'), b'Z' * 20000, Y2023)  # 更早
+    assert find_duplicates([(orig, 20000), (extr, 20000)])[0][0] == extr
+    groups = find_duplicates([(orig, 20000), (extr, 20000)],
+                             avoid_keep={extr})
+    assert groups[0][0] == orig            # 用户原有的那份留在正常分类里
+
+
+def test_extract_archives_keeps_loose_original(tmp_path):
+    import zipfile
+    src = tmp_path / 'src'
+    data = b'Q' * 30000
+    mk(src / '合同.pdf', data, Y2024)
+    zp = src / '打包.zip'
+    with zipfile.ZipFile(zp, 'w') as z:
+        zi = zipfile.ZipInfo('合同.pdf', date_time=(2020, 1, 1, 0, 0, 0))
+        z.writestr(zi, data)
+    out = tmp_path / 'out'
+    _logs, r = run(OrganizeOptions([str(src)], str(out), preview=False,
+                                   extract_archives=True))
+    assert (out / 'PDF' / '2024' / '合同.pdf').exists()
+    assert list((out / BUCKET_DUP).rglob('合同.pdf'))

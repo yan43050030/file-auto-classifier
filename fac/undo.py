@@ -35,6 +35,12 @@ class Journal:
                      **(meta or {})})
         return self
 
+    def open_append(self):
+        """续写已有台账(不再写 meta,以免覆盖原整理时间)。
+        用于事后「一键清理」把删到回收站的文件补记进当初那次整理的台账。"""
+        self._fp = open(self.path, 'a', encoding='utf-8')
+        return self
+
     def _write(self, rec):
         if not self._fp:
             return
@@ -45,7 +51,7 @@ class Journal:
             pass
 
     def record(self, op, src, dst):
-        """op: move | copy | mkdir | rmdir"""
+        """op: move | copy | copy_tree | mkdir | rmdir | trash"""
         self._write({'type': 'op', 'op': op, 'src': src, 'dst': dst})
         self.count += 1
 
@@ -97,10 +103,15 @@ def undo(path, log=print, cancel=None):
     - copy: 删除 dst(原件本就没动)
     - copy_tree: 删除复制出来的整个目录
     - rmdir: 重建被删掉的空文件夹
+    - mkdir: 删掉整理时新建、撤销后已空的文件夹(不留一堆空的分类目录)
+    - trash: 该文件已被「一键清理」删到回收站 —— 无法自动还原,
+             列出原位置提示从回收站找回,不再算作"找不到"
     """
     meta, ops = read_journal(path)
     stats = {'restored': 0, 'removed': 0, 'missing': 0,
-             'failed': 0, 'cancelled': False}
+             'failed': 0, 'cancelled': False, 'trashed': 0,
+             'dirs_removed': 0}
+    trashed = set()
     log(f'读取台账: {os.path.basename(path)}(共 {len(ops)} 条操作)')
     if meta.get('time'):
         log(f'  整理时间: {meta["time"]}   模式: {meta.get("op_mode", "?")}')
@@ -112,6 +123,22 @@ def undo(path, log=print, cancel=None):
             break
         op, src, dst = rec.get('op'), rec.get('src'), rec.get('dst')
         try:
+            if op == 'trash':
+                trashed.add(dst)
+                stats['trashed'] += 1
+                if stats['trashed'] <= 20:
+                    log(f'  [回收站] {os.path.basename(dst)} 已被清理到回收站,'
+                        f'如需找回请从回收站还原(原位置: {src or dst})')
+                continue
+            if op in ('move', 'copy') and dst in trashed:
+                continue          # 已在回收站,上面已提示,不算"找不到"
+            if op == 'mkdir':
+                try:
+                    os.rmdir(long_path(src))      # 只删空的,有东西就留着
+                    stats['dirs_removed'] += 1
+                except OSError:
+                    pass
+                continue
             if op == 'move':
                 if not os.path.exists(long_path(dst)):
                     stats['missing'] += 1
@@ -142,9 +169,11 @@ def undo(path, log=print, cancel=None):
             stats['failed'] += 1
             log(f'  [失败] 还原 {os.path.basename(dst or src or "")}: {e}')
 
+    tail = (f'另有 {stats["trashed"]} 个已清理到回收站,需从回收站手动还原。'
+            if stats['trashed'] else '')
     log(f'撤销完成:还原 {stats["restored"]} 个,删除副本 {stats["removed"]} 个,'
-        f'找不到 {stats["missing"]} 个,失败 {stats["failed"]} 个。')
-    # 清掉整理时产生的空文件夹(还原后目标目录多半空了)
+        f'找不到 {stats["missing"]} 个,失败 {stats["failed"]} 个;'
+        f'清掉整理时新建的空文件夹 {stats["dirs_removed"]} 个。{tail}')
     return stats
 
 
