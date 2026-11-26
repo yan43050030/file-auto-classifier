@@ -24,6 +24,13 @@ SPECIAL_FOLDERS = {'未分类', '解压失败', '暂未解压', '原始反馈'}
 _TOOL_FILES = ('反馈核对表', '文件名对照表', '分类日志_', '整理台账_', '整理报告', '整理历史')
 
 
+def _is_company(name, code):
+    if code and valid_uscc(code):
+        return True
+    from .company import _FORMAL_RE, _SUFFIX_RE
+    return bool(name) and bool(_FORMAL_RE.search(name) or _SUFFIX_RE.search(name[-4:] or ''))
+
+
 def _top(rel):
     return rel.replace('\\', '/').split('/')[0]
 
@@ -235,6 +242,12 @@ class Library:
         if auto_folder and auto_folder != folder:
             self._imported.add((self._who(auto_folder),) + k)
             rec['auto'] = auto_folder          # 自动分类本来要放的位置(手动改归过)
+        if folder and folder not in SPECIAL_FOLDERS:
+            # 明确写出归属对象,供 Case Intel「从归档库导入」直接使用,不必从文件夹名猜
+            who_name, who_code = parse_folder(folder)
+            rec['who_name'] = who_name or folder
+            rec['who_code'] = who_code
+            rec['kind'] = 'company' if _is_company(who_name, who_code) else 'person'
         self._append(rec)
 
     # ---------- 当前状态(折叠归档记录) ----------

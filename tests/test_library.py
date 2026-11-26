@@ -362,3 +362,21 @@ def test_sync_updates_moves_renames_edits_and_deletes(tmp_path):
     wb = openpyxl.load_workbook(p)
     rows = [[c.value for c in r] for r in wb.active.iter_rows()]
     assert any(r[2] == '张三_回执.txt' and r[5] == '已删除/找不到' for r in rows)
+
+
+def test_ledger_records_who_for_case_intel(tmp_path):
+    """归档记录明确写出归属对象(人员/企业、名称、证号),供 Case Intel 导入。"""
+    from fac.idcard import check_digit as cd
+    import json as _json
+    co = '91110108MA01AB2C3T'
+    out = tmp_path / 'out'
+    run({'税务.zip': {f'某某科技有限公司_{co}_纳税信息.txt': '纳税' * 9,
+                      '张三_户籍.txt': '户籍' * 9,
+                      '无关回执.txt': '回执' * 9}}, out, f'张三,{ID}')
+    recs = [_json.loads(x) for x in (out / LEDGER_NAME).read_text(encoding='utf-8').splitlines()]
+    by = {r['name']: r for r in recs if r.get('type') == 'file'}
+    assert by['张三_户籍.txt']['kind'] == 'person'
+    assert by['张三_户籍.txt']['who_name'] == '张三' and by['张三_户籍.txt']['who_code'] == ID
+    c = by[f'某某科技有限公司_{co}_纳税信息.txt']
+    assert c['kind'] == 'company' and c['who_code'] == co and c['who_name'] == '某某科技有限公司'
+    assert 'kind' not in by['无关回执.txt']                     # 未分类不是归属对象
