@@ -171,8 +171,9 @@ NON_BANK_SOURCES = [
     '人社厅社保信息', '不动产信息', '出生医学证明', '保险信息',
     '公安部出入境记录信息', '公安部出入境证件信息', '公安部旅馆住宿人员信息',
     '公安部人口和户籍信息', '铁路总公司票面信息', '铁路总公司同行人信息',
+    '税务缴纳信息', '增值税专用发票信息', '自然资源部信息',
 ]
-BANK_SOURCES = ['人民银行账户信息', '中国工商银行', '中国农业银行股份有限公司',
+BANK_SOURCES = ['人民银行账户信息', '征信中心征信', '中国工商银行', '中国农业银行股份有限公司',
                 '建行', '招商银行信用卡中心', '某某农村商业银行', '支付宝']
 
 
@@ -209,3 +210,12 @@ def test_bank_files_go_to_bank_folder_and_pboc_never_empty(tmp_path):
     assert sorted(os.listdir(person / '其他数据')) == [
         '【第一批反馈】张三_公安部出入境记录信息.txt', '【第一批反馈】张三_铁路总公司票面信息.txt']
     assert not (person / '疑似空值').exists()
+
+
+def test_invoice_with_bank_account_column_is_not_bank(tmp_path):
+    from fac.doctype import is_bank_related, is_pboc
+    inv = xlsx(tmp_path / 'i.xlsx', [['发票代码', '开票日期', '金额', '税额', '购方开户行及账号'],
+                                     ['011001', '2024-01-02', 1000, 130, '工商银行 6222…']])
+    assert not is_bank_related(inv, '张三_增值税专用发票信息.xlsx', '')
+    assert not is_bank_related(inv, '张三.xlsx', '国家税务总局某某市税务局')
+    assert is_pboc('张三_征信中心征信.pdf', '')
