@@ -290,3 +290,40 @@ def test_theme_ignores_windows_dark_mode(app):
     finally:
         app.setPalette(old_pal)
         app.setStyleSheet(old_ss)
+
+
+def test_output_dir_follows_last_added_archive(win, tmp_path):
+    a = tmp_path / 'A'; b = tmp_path / 'B'; a.mkdir(); b.mkdir()
+    (a / '1.zip').write_bytes(b'PK'); (b / '2.zip').write_bytes(b'PK')
+    win.txt_out.setText('/old/saved/dir')          # 上次保存的配置,不算手动
+    win._out_manual = False
+    win._add_input(str(a / '1.zip'))
+    assert win.txt_out.text().startswith(os.path.join(str(a), '分类结果_'))
+    win._add_input(str(b / '2.zip'))                # 跟随最后添加的
+    assert win.txt_out.text().startswith(os.path.join(str(b), '分类结果_'))
+
+
+def test_output_dir_kept_after_manual_edit(win, tmp_path):
+    a = tmp_path / 'A'; a.mkdir(); (a / '1.zip').write_bytes(b'PK')
+    win.txt_out.setText('D:/我的结果')
+    win.txt_out.textEdited.emit('D:/我的结果')      # 等同用户亲手输入
+    assert win._out_manual is True
+    win._add_input(str(a / '1.zip'))
+    assert win.txt_out.text() == 'D:/我的结果'
+
+
+def test_auto_company_option_reaches_joboptions(win):
+    assert win._ck['auto_company'].isChecked()
+    cfg = win._gather_cfg()
+    assert cfg['auto_company'] is True
+
+
+def test_output_dir_not_reset_after_job_or_same_mode(win, tmp_path):
+    a = tmp_path / 'A'; a.mkdir(); (a / '1.zip').write_bytes(b'PK')
+    win._out_manual = False
+    win._add_input(str(a / '1.zip'))
+    win.txt_out.setText(str(tmp_path / 'chosen'))
+    win._on_mode_changed()                          # 任务结束时的刷新
+    assert win.txt_out.text() == str(tmp_path / 'chosen')
+    win.cmb_mode.setCurrentIndex(1)                 # 真切换模式 → 跟随并改名
+    assert '整理结果_' in win.txt_out.text()

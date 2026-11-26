@@ -19,6 +19,7 @@
 ### 分类
 - **人员名单**:每行一个人 `姓名,身份证号,曾用名…`,任一标识命中都归入同一文件夹 —— 不同单位有的按姓名、有的按证号命名文件也不会"分家";支持从 Excel 导入名单;同名人员自动用证号后 4 位区分文件夹。
 - **最长匹配优先**:名单同时有"张三"和"张三丰"时,张三丰的文件不会误归给张三。
+- **企业识别**:查企业账户/纳税信息时,按 **公司名称** 或 **统一社会信用代码** 归档;名单里写 `公司名称,信用代码` 即可,不写名单也能自动识别。同一批文件中名称与代码同时出现即自动关联,只写名称或只写代码的文件都归入「公司名称_信用代码」;信用代码按 **GB 32100 三重校验**(登记部门/类别码 + 组织机构代码校验位 + 整体校验位),银行/税务等反馈单位不会被误当企业。
 - **身份证号识别**:未命中名单的文件,按文件名中的身份证号自动归类;18 位号码做 **GB 11643 校验位验证**(订单号等 18 位数字不再误判),支持 15 位老号码并自动与 18 位互认。
 - **来源单位标注**:以压缩包文件名为"来源单位",可选人员文件夹下按单位建子文件夹、或文件名加【单位】前缀。
 - **反馈核对表**:自动生成"人员 × 单位"矩阵(CSV + xlsx,空格标黄),哪个单位没反馈哪个人一目了然。
@@ -47,7 +48,7 @@
 - **试运行预览**:先列出"哪个文件 → 哪个文件夹"清单,确认后再执行;发现分错的可在预览里**双击直接改归属**(支持多选批量改),当场修正再执行。
 - **进度条 + 可取消**;日志同时写入输出目录 `分类日志_时间.txt`。
 - **拖拽添加**:压缩包 / 文件夹直接拖进窗口。
-- **配置记忆**:输出目录、名单、选项自动保存;支持保存 / 加载任务模板(同一批人查多轮直接复用)。
+- **配置记忆**:名单、选项自动保存;输出目录默认跟随最后添加的压缩包所在目录(手动改过则保持);支持保存 / 加载任务模板(同一批人查多轮直接复用)。
 - **命令行模式**:带参数运行即无界面批处理,可配合计划任务自动处理固定收件目录(`-h` 查看用法)。
 - **高分屏清晰**:PySide6(Qt)界面,适配 Windows 125% / 150% / 200% 缩放。
 
@@ -81,7 +82,7 @@ python 文件自动分类工具.py -i a.zip b.rar -o out --kw 张三 --kw "李�
 ```bash
 pip install pyinstaller -r requirements.txt
 
-pyinstaller --onefile --windowed --name 文件自动分类工具V4.3.2 ^
+pyinstaller --onefile --windowed --name 文件自动分类工具V4.4 ^
   --icon app.ico --add-data "app.ico;." --add-binary "UnRAR.exe;." ^
   --collect-submodules py7zr --collect-submodules rarfile --collect-submodules pyzipper ^
   --collect-submodules send2trash --collect-submodules openpyxl ^
@@ -90,7 +91,7 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V4.3.2 ^
   文件自动分类工具.py
 ```
 
-生成的 `dist/文件自动分类工具V4.3.2.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
+生成的 `dist/文件自动分类工具V4.4.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
 (如不需要 Word/PDF 内容匹配,可不装 python-docx / pdfplumber,体积更小。)
 
 > 每次发版由 GitHub Actions 在 Windows 环境自动跑完测试后打包,
@@ -105,6 +106,7 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V4.3.2 ^
 | `fac/roster.py` | 人员名单(多标识合并、最长匹配、Excel 导入) |
 | `fac/pipeline.py` | 主流程调度(预览 / 进度 / 取消 / 去重 / 单位标注) |
 | `fac/idcard.py` | 身份证号校验(18 位校验位 / 15 位 / 互转) |
+| `fac/company.py` | 企业识别(统一社会信用代码校验 / 公司名称提取 / 名称↔代码关联) |
 | `fac/password.py` | 密码管理与密码本解析 |
 | `fac/content_match.py` | Excel/Word/PDF/文本 内容匹配 |
 | `fac/excel_split.py` | Excel 按人拆分 |

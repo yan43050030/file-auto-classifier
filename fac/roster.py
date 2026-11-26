@@ -7,12 +7,15 @@
     王五,110101199001011234,王小五,老王
 
 普通关键字(公司名等)直接写一行即可,等价于只有"姓名"的人员。
+企业可写「公司名称,统一社会信用代码」,名称或代码任一命中都归入「名称_代码」文件夹:
+    某某科技有限公司,91110108MA01AB2C3T
 """
 
 import re
 
 from .util import safe_folder_name
 from .idcard import valid_id15, valid_id18, id15_to_18
+from .company import valid_uscc
 
 _SEP_RE = re.compile(r'[,，;；\t]|\s+')
 
@@ -104,8 +107,9 @@ class Roster:
 
     @staticmethod
     def _looks_like_id(tok: str) -> bool:
+        """身份证号(18/15 位)或统一社会信用代码。"""
         t = tok.strip().upper()
-        return valid_id18(t) or valid_id15(t)
+        return valid_id18(t) or valid_id15(t) or valid_uscc(t)
 
     @classmethod
     def from_text(cls, text: str):
@@ -145,9 +149,13 @@ class Roster:
         name_col = id_col = None
         alias_cols = []
         for i, h in enumerate(header):
-            if any(k in h for k in ('姓名', '名字', '人员', 'name', 'Name')):
+            if name_col is None and any(
+                    k in h for k in ('姓名', '名字', '人员', 'name', 'Name',
+                                     '企业名称', '公司名称', '单位名称',
+                                     '纳税人名称', '名称', '户名')):
                 name_col = i
-            elif '身份证' in h or '证件' in h or '证号' in h:
+            elif any(k in h for k in ('身份证', '证件', '证号', '信用代码',
+                                      '纳税人识别号', '税号', '注册号')):
                 id_col = i
             elif any(k in h for k in ('曾用名', '别名', '其他名', 'alias')):
                 alias_cols.append(i)
@@ -174,6 +182,9 @@ class Roster:
                         continue
                     if cls._looks_like_id(tok):
                         ids.append(tok)
+                    elif has_header and c == id_col and \
+                            re.fullmatch(r'[0-9A-Za-z]{15,20}', tok):
+                        ids.append(tok)        # 老式 15/20 位纳税人识别号等
                     elif not has_header or c in alias_cols:
                         aliases.append(tok)
             persons.append(Person(name, ids, aliases))

@@ -16,6 +16,7 @@ from .password import PasswordManager, load_password_candidates
 from .idcard import find_ids
 from .rules import Rule, match_rules
 from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
+from .company import build_company_map, CompanyMatcher
 from . import extract as ex
 from .report import write_matrix_report
 
@@ -40,7 +41,8 @@ class JobOptions:
                  content_match=False, split_excel=False, dedup=False,
                  auto_pw_txt=True, pw_files=None, delete_ok=False,
                  rules=None, intelligent=True,
-                 intelligent_min_freq=10, intelligent_exclude=None):
+                 intelligent_min_freq=10, intelligent_exclude=None,
+                 auto_company=True):
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.roster = roster
@@ -58,6 +60,8 @@ class JobOptions:
         self.intelligent = intelligent
         self.intelligent_min_freq = max(2, int(intelligent_min_freq or 10))
         self.intelligent_exclude = list(intelligent_exclude or [])
+        # 未命中名单时按 公司名称 / 统一社会信用代码 自动归档
+        self.auto_company = auto_company
 
 
 class PlanItem:
@@ -304,6 +308,14 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             detected_only = {d['name'] for d in detected}
             imatch = IntelligentMatcher(opts.roster, n2i, i2n, detected_only)
 
+        # ---- 3.6 企业识别:公司名称 ↔ 统一社会信用代码 ----
+        cmatch = None
+        if opts.auto_company:
+            n2c, c2n = build_company_map(all_files,
+                                         exclude=opts.intelligent_exclude,
+                                         log=tee)
+            cmatch = CompanyMatcher(n2c, c2n, exclude=opts.intelligent_exclude)
+
         plan = []
         for i, (fp, fname, unit) in enumerate(all_files, 1):
             ck()
@@ -354,6 +366,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                     plan.append(PlanItem(fp, fname, unit, 'place',
                                          [r.folder()], via=f'规则:{_RULE_CN.get(r.rule_type, r.rule_type)}'))
                     continue
+            # 文件名里的线索优先于正文:证号 → 企业 → 正文证号 → 正文企业
             if opts.auto_id:
                 ids = find_ids(fname)
                 if ids:
@@ -361,14 +374,26 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                                          [safe_folder_name(ids[0])],
                                          via='身份证号'))
                     continue
+            if cmatch is not None:
+                m = cmatch.match(fname)
+                if m:
+                    plan.append(PlanItem(fp, fname, unit, 'place',
+                                         [m[0]], via=m[1]))
+                    continue
+            if opts.auto_id and use_content:
                 # 文件名没有证号 → 内容里找(如"回执001.pdf"正文含证号)
-                if use_content:
-                    ids = find_ids(get_text())
-                    if ids:
-                        plan.append(PlanItem(fp, fname, unit, 'place',
-                                             [safe_folder_name(ids[0])],
-                                             via='内容证号'))
-                        continue
+                ids = find_ids(get_text())
+                if ids:
+                    plan.append(PlanItem(fp, fname, unit, 'place',
+                                         [safe_folder_name(ids[0])],
+                                         via='内容证号'))
+                    continue
+            if cmatch is not None and use_content:
+                m = cmatch.match_content(get_text())
+                if m:
+                    plan.append(PlanItem(fp, fname, unit, 'place',
+                                         [m[0]], via=m[1]))
+                    continue
             plan.append(PlanItem(fp, fname, unit, 'place', ['未分类'],
                                  via='未分类'))
 

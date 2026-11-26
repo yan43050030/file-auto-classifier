@@ -262,7 +262,13 @@ class MainWindow(OrganizeMixin, QMainWindow):
         lay.addLayout(mr)
         r = QHBoxLayout(); r.setSpacing(6)
         self.txt_out = QLineEdit()
-        self.txt_out.setPlaceholderText('自动填入,可手动改...')
+        self.txt_out.setPlaceholderText('默认:最后添加的压缩包所在目录下(可手动改)')
+        self.txt_out.setToolTip('默认跟随最后添加的压缩包/文件所在目录;\n'
+                                '手动输入或点「浏览」修改后,本次不再自动变化。')
+        # 只有用户亲手输入才算"手动改过"(程序 setText 不触发 textEdited)
+        self._out_manual = False
+        self.txt_out.textEdited.connect(
+            lambda _t: setattr(self, '_out_manual', bool(_t.strip())))
         r.addWidget(self.txt_out)
         b = QPushButton('浏览'); b.setFixedHeight(32); b.clicked.connect(self._choose_out)
         r.addWidget(b)
@@ -293,8 +299,9 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.txt_roster.setPlaceholderText(
             '# 每行一个人:姓名,身份证号,曾用名…\n'
             '# 同一个人的姓名、证号、曾用名任一命中,文件都归入 TA 的文件夹。\n'
-            '# 公司名等普通关键字也直接写一行\n'
-            '# 示例(去掉开头的#即生效):\n张三\n李四,110101199003078515\n王五,王小五,老王')
+            '# 企业:公司名称,统一社会信用代码(名称或代码任一命中都归同一文件夹)\n'
+            '# 示例(去掉开头的#即生效):\n张三\n李四,110101199003078515\n王五,王小五,老王\n'
+            '某某科技有限公司,91110108MA01AB2C3T')
         tl.addWidget(self.txt_roster)
         tabs.addTab(tr, '📋 人员名单')
 
@@ -328,6 +335,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         grid = QGridLayout(); grid.setSpacing(8)
         ck_specs = [
             ('auto_id', '自动识别身份证号(18/15位,带校验码)', True),
+            ('auto_company', '自动识别企业:公司名称 / 统一社会信用代码(自动关联)', True),
             ('preview', '试运行预览:先看清单,确认后再执行', True),
             ('content_match', '内容匹配:读 Excel/Word/PDF/文本查人', False),
             ('split_excel', 'Excel 按人拆分:多人表按行拆每人一份(原表保留)', False),
@@ -501,10 +509,20 @@ class MainWindow(OrganizeMixin, QMainWindow):
         elif os.path.isfile(path):
             self.inputs.append(path)
             self.lst_inputs.addItem(f'📄 {path}')
-        # 首次添加自动填输出目录
-        if len(self.inputs) == 1 and not self.txt_out.text().strip():
-            base = path if os.path.isdir(path) else os.path.dirname(path)
-            self.txt_out.setText(os.path.join(base, f'分类结果_{datetime.datetime.now():%Y%m%d}'))
+        else:
+            return
+        self._auto_out()
+
+    def _auto_out(self):
+        """输出目录默认跟随「最后添加」的压缩包/文件所在目录
+        (文件夹则放在该文件夹里);用户手动改过(输入或浏览)后不再自动改。"""
+        if self._out_manual or not self.inputs:
+            return
+        last = self.inputs[-1]
+        base = last if os.path.isdir(last) else os.path.dirname(last)
+        kind = '整理结果' if self._mode() == 'organize' else '分类结果'
+        self.txt_out.setText(os.path.join(
+            base, f'{kind}_{datetime.datetime.now():%Y%m%d}'))
 
     def _add_archives(self):
         fs, _ = QFileDialog.getOpenFileNames(
@@ -559,7 +577,8 @@ class MainWindow(OrganizeMixin, QMainWindow):
     def _choose_out(self):
         d = QFileDialog.getExistingDirectory(self, '选择输出目录')
         if d:
-            self.txt_out.setText(d)
+            self.txt_out.setText(os.path.normpath(d))
+            self._out_manual = True
 
     def _choose_pw(self):
         f, _ = QFileDialog.getOpenFileName(
@@ -895,6 +914,13 @@ class MainWindow(OrganizeMixin, QMainWindow):
 
     def _on_mode_changed(self, _idx=0):
         organize = (self._mode() == 'organize')
+        # 真正切换了模式时才同步「分类结果/整理结果」名称
+        # (任务结束后也会调用本函数刷新按钮,不能顺手改掉输出目录)
+        mode = self._mode()
+        if getattr(self, '_last_mode', mode) != mode and \
+                getattr(self, '_out_manual', True) is False and self.inputs:
+            self._auto_out()
+        self._last_mode = mode
         self.btn_run.setText('▶  开始整理' if organize else '▶  开始分类')
         # 切到对应设置页,避免用户改错地方
         try:
@@ -931,8 +957,10 @@ class MainWindow(OrganizeMixin, QMainWindow):
             return
 
         roster = Roster.from_text(self.txt_roster.toPlainText())
-        if len(roster) == 0 and not self._ck['auto_id'].isChecked():
-            QMessageBox.warning(self, '提示', '请至少输入名单,或勾选"自动识别身份证号"。')
+        if len(roster) == 0 and not self._ck['auto_id'].isChecked() \
+                and not self._ck['auto_company'].isChecked():
+            QMessageBox.warning(self, '提示',
+                                '请至少输入名单,或勾选"自动识别身份证号/企业"。')
             return
 
         pw_files = []

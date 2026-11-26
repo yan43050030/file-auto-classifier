@@ -46,6 +46,8 @@ def build_parser():
                    help='命中多个关键字时复制到每个文件夹(默认只归第一个)')
     p.add_argument('--no-auto-id', action='store_true',
                    help='关闭"按文件名中的身份证号自动分类"')
+    p.add_argument('--no-auto-company', action='store_true',
+                   help='关闭"按公司名称/统一社会信用代码自动分类"')
     p.add_argument('--unit-mode', choices=['subfolder', 'prefix', 'none'],
                    default='subfolder',
                    help='来源单位标注方式:subfolder=人员文件夹下按单位建子文件夹(默认),'
@@ -232,14 +234,15 @@ def main(argv=None):
         return
 
     roster = _load_roster(args)
-    if len(roster) == 0 and args.no_auto_id:
-        print('错误:没有名单/关键字,又关闭了身份证号识别,无法分类。',
+    if len(roster) == 0 and args.no_auto_id and args.no_auto_company:
+        print('错误:没有名单/关键字,又关闭了身份证号和企业识别,无法分类。',
               file=sys.stderr)
         sys.exit(2)
 
     opts = JobOptions(
         inputs=args.input, out_dir=args.out, roster=roster,
         copy_to_each=args.each, auto_id=not args.no_auto_id,
+        auto_company=not args.no_auto_company,
         unit_mode=args.unit_mode,
         content_match=args.content_match, split_excel=args.split_excel,
         dedup=args.dedup,

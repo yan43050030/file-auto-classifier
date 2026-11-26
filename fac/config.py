@@ -13,6 +13,7 @@ DEFAULTS = {
     'roster_text': '',
     'multi_hit': 'first',        # first | each
     'auto_id': True,
+    'auto_company': True,        # 按公司名称/统一社会信用代码自动归档
     'unit_mode': 'subfolder',    # subfolder | prefix | none
     'preview': False,
     'content_match': False,
