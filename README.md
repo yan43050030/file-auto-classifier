@@ -81,7 +81,7 @@ python 文件自动分类工具.py -i a.zip b.rar -o out --kw 张三 --kw "李�
 ```bash
 pip install pyinstaller -r requirements.txt
 
-pyinstaller --onefile --windowed --name 文件自动分类工具V4.3 ^
+pyinstaller --onefile --windowed --name 文件自动分类工具V4.3.1 ^
   --icon app.ico --add-data "app.ico;." --add-binary "UnRAR.exe;." ^
   --collect-submodules py7zr --collect-submodules rarfile --collect-submodules pyzipper ^
   --collect-submodules send2trash --collect-submodules openpyxl ^
@@ -90,7 +90,7 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V4.3 ^
   文件自动分类工具.py
 ```
 
-生成的 `dist/文件自动分类工具V4.3.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
+生成的 `dist/文件自动分类工具V4.3.1.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
 (如不需要 Word/PDF 内容匹配,可不装 python-docx / pdfplumber,体积更小。)
 
 > 每次发版由 GitHub Actions 在 Windows 环境自动跑完测试后打包,
@@ -119,6 +119,7 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V4.3 ^
 | `fac/project.py` | 代码/工程目录识别(整体保留不打散) |
 | `fac/gui.py` / `fac/cli.py` | 图形界面 / 命令行 |
 | `fac/gui_organize.py` / `fac/gui_style.py` | 界面中「文件整理」相关操作 / 界面样式 |
+| `fac/gui_bridge.py` | 后台线程 → 界面线程的安全通道(防闪退) |
 | `fac/config.py` | 配置记忆与任务模板 |
 | `tests/` | 单元测试(`python -m pytest tests/`,含界面无头冒烟) |
 | `使用说明.md` | 面向普通用户的详细使用说明 |

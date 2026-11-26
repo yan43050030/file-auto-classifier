@@ -164,3 +164,107 @@ def test_purge_ignores_user_files_in_bucket(win, tmp_path, monkeypatch):
     win._purge_now()
     assert shown and '没有' in shown[-1]
     assert (out / '重复文件' / '我的.txt').exists()
+
+
+# ---------- V4.3.1:后台线程不得直接碰界面(Windows 上会闪退) ----------
+
+def _pump(app, cond, timeout=20):
+    import time
+    t0 = time.time()
+    while not cond() and time.time() - t0 < timeout:
+        app.processEvents()
+        time.sleep(0.01)
+    return cond()
+
+
+def test_log_and_progress_from_worker_thread(win, app):
+    import threading
+    def work():
+        for i in range(500):
+            win._log(f'第{i}行')
+            win._on_progress('place', i, 500)
+    t = threading.Thread(target=work)
+    t.start(); t.join()
+    assert win.log.toPlainText() == ''            # 后台线程没有直接改控件
+    assert _pump(app, lambda: '第499行' in win.log.toPlainText())
+
+
+def test_call_sync_runs_on_main_thread(win, app):
+    import threading
+    seen = []
+
+    def job():
+        seen.append(threading.current_thread() is threading.main_thread())
+        return 42
+
+    box = []
+    t = threading.Thread(target=lambda: box.append(win._bridge.call_sync(job)))
+    t.start()
+    assert _pump(app, lambda: box)
+    t.join()
+    assert box == [42] and seen == [True]
+
+
+def test_drop_files_adds_inputs(win, tmp_path):
+    from PySide6.QtCore import QMimeData, QUrl
+    f = tmp_path / '单位A.zip'
+    f.write_bytes(b'PK')
+    md = QMimeData()
+    md.setUrls([QUrl.fromLocalFile(str(f)), QUrl.fromLocalFile(str(tmp_path))])
+
+    class Ev:
+        accepted = False
+        def mimeData(self): return md
+        def acceptProposedAction(self): self.accepted = True
+        def ignore(self): pass
+
+    for handler in (win.dragEnterEvent, win.dragMoveEvent):
+        e = Ev(); handler(e); assert e.accepted
+    e = Ev(); win.lst_inputs.dropEvent(e)      # 拖到列表上
+    assert e.accepted
+    assert os.path.normpath(str(f)) in win.inputs
+    assert os.path.normpath(str(tmp_path)) in win.inputs
+    assert win.lst_inputs.count() == 2
+
+
+def test_classify_nested_archive_end_to_end(win, app, tmp_path, monkeypatch):
+    """压缩包套压缩包 + 预览确认:整个流程在后台线程跑完且不闪退。"""
+    import io
+    import zipfile
+    from PySide6.QtWidgets import QMessageBox, QDialog
+    done = []
+    monkeypatch.setattr(QMessageBox, 'information',
+                        lambda *a, **k: done.append(a[-1]))
+    monkeypatch.setattr(QMessageBox, 'question',
+                        lambda *a, **k: QMessageBox.Yes)
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, 'w') as z:
+        z.writestr('李四_材料.pdf', 'y')
+    mid = io.BytesIO()
+    with zipfile.ZipFile(mid, 'w') as z:
+        z.writestr('第三层.zip', inner.getvalue())
+        z.writestr('张三_身份证.txt', 'x')
+    outer = tmp_path / '单位A.zip'
+    with zipfile.ZipFile(outer, 'w') as z:
+        z.writestr('第二层.zip', mid.getvalue())
+    out = tmp_path / 'out'
+    win.inputs = [str(outer)]
+    win.txt_out.setText(str(out))
+    win.txt_roster.setPlainText('张三\n李四')
+    win._ck['preview'].setChecked(True)
+
+    def accept_preview():
+        d = app.activeModalWidget()
+        if isinstance(d, QDialog):
+            d._ok = True
+            d.accept()
+
+    from PySide6.QtCore import QTimer
+    tm = QTimer()                 # 预览框自带事件循环,用定时器去点「确认」
+    tm.timeout.connect(accept_preview)
+    tm.start(50)
+    win._start()
+    assert _pump(app, lambda: bool(done), timeout=30)
+    tm.stop()
+    assert list((out / '张三').rglob('张三_身份证.txt'))
+    assert list((out / '李四').rglob('李四_材料.pdf'))

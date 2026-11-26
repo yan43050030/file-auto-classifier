@@ -110,6 +110,7 @@ class OrganizeMixin:
         box.accepted.connect(dlg.accept)
         lay.addWidget(box)
         dlg.exec()
+        dlg.deleteLater()
 
     def _purge_now(self):
         """把整理结果里的「可清理/重复文件/旧版本」删到回收站。

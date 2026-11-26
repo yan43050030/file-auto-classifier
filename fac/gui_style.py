@@ -17,11 +17,11 @@ QSS = f"""
 QMainWindow {{ background: {BG}; }}
 QGroupBox {{
     background: {CARD_BG}; border: 1px solid {BORDER}; border-radius: {RADIUS};
-    margin-top: 16px; padding: 16px; padding-top: 24px;
+    margin-top: 14px; padding: 12px; padding-top: 18px;
     font-size: 13px; font-weight: 600; color: {TEXT};
 }}
 QGroupBox::title {{
-    subcontrol-origin: margin; left: 16px; top: 4px;
+    subcontrol-origin: margin; left: 12px; padding: 0 4px;
     color: {TEXT};
 }}
 QPushButton {{

@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import datetime
+import gc
 import threading
 
 from PySide6.QtCore import Qt, Signal, QThread, QSize
@@ -35,6 +36,50 @@ from . import extract as ex
 
 from .gui_style import QSS, TEXT_SEC, CARD_BG, BORDER
 from .gui_organize import OrganizeMixin
+from .gui_bridge import UiBridge, in_main_thread
+
+# ---------- 拖拽 ----------
+
+def _accept_urls(e):
+    if e.mimeData().hasUrls():
+        e.acceptProposedAction()
+    else:
+        e.ignore()
+
+
+def _drop_urls(e, add):
+    if not e.mimeData().hasUrls():
+        e.ignore()
+        return
+    for url in e.mimeData().urls():
+        p = url.toLocalFile()
+        if p:
+            add(os.path.normpath(p))
+    e.acceptProposedAction()
+
+
+class _DropList(QListWidget):
+    """可从资源管理器拖入文件/文件夹的输入列表。
+
+    QListWidget 默认在 dragMove 阶段拒绝外部文件(光标一直是禁止符号),
+    所以 dragEnter / dragMove / drop 三个事件都要接管。"""
+
+    def __init__(self, on_path, parent=None):
+        super().__init__(parent)
+        self._on_path = on_path
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragDropMode(QListWidget.DropOnly)
+
+    def dragEnterEvent(self, e):
+        _accept_urls(e)
+
+    def dragMoveEvent(self, e):
+        _accept_urls(e)
+
+    def dropEvent(self, e):
+        _drop_urls(e, self._on_path)
+
 
 # ---------- 主窗口 ----------
 
@@ -45,7 +90,25 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.inputs = []
         self._cancel = threading.Event()
         self._rule_rows = []
+        # 后台线程只往这里投递,由主线程定时刷到界面(见 _flush_ui)
+        self._bridge = UiBridge(self)
+        self._log_buf = []
+        self._log_lock = threading.Lock()
+        self._prog_state = None
         self._setup_ui()
+        from PySide6.QtCore import QTimer
+        self._ui_timer = QTimer(self)
+        self._ui_timer.setInterval(100)
+        self._ui_timer.timeout.connect(self._flush_ui)
+        self._ui_timer.start()
+        # Python 的循环垃圾回收可能恰好在后台线程里触发,顺手释放掉已不用的
+        # 对话框等 Qt 对象 —— Qt 要求它们只能在主线程销毁,否则直接闪退。
+        # 所以关掉自动回收,改由主线程每 2 秒回收一次。
+        gc.disable()
+        self._gc_timer = QTimer(self)
+        self._gc_timer.setInterval(2000)
+        self._gc_timer.timeout.connect(gc.collect)
+        self._gc_timer.start()
         self._apply_cfg(conf.load_config())
         self._set_icon()
 
@@ -106,10 +169,13 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.lbl_prog.setStyleSheet(f'color:{TEXT_SEC};font-size:11px;')
         self.lbl_prog.setVisible(False)
         bl.addWidget(self.lbl_prog)
-        self.log = QTextEdit()
+        # QPlainTextEdit + 行数上限:文件特别多时日志也不会把界面拖慢
+        # (完整日志另存于输出目录的 分类日志_*.txt)
+        self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(5000)
         self.log.setStyleSheet(
-            f'QTextEdit{{font-family:Consolas,"Microsoft YaHei UI";'
+            f'QPlainTextEdit{{font-family:Consolas,"Microsoft YaHei UI";'
             f'font-size:11px;background:{CARD_BG};border:1px solid {BORDER};'
             f'border-radius:6px;padding:8px;}}')
         self.log.setMinimumHeight(80)
@@ -117,18 +183,49 @@ class MainWindow(OrganizeMixin, QMainWindow):
         splitter.addWidget(bottom_w)
 
         # 初始比例:上 1.5 : 中 4 : 下 1.5
-        splitter.setSizes([150, 400, 150])
+        splitter.setSizes([170, 420, 150])
+        # 窗口变大/变小时,多出或缺少的高度主要给「分类设置」
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
+        splitter.setChildrenCollapsible(False)
 
         main.addWidget(splitter)
 
-        self.resize(1000, 750)
-        self.setMinimumSize(800, 600)
+        # 按屏幕可用区域决定初始大小:笔记本(1366×768、125%/150% 缩放)
+        # 上窗口不能比屏幕还高,否则底部的「开始」按钮和日志会被挡住
+        self.setMinimumSize(720, 500)
+        w, h = 1000, 760
+        try:
+            scr = QApplication.primaryScreen()
+            if scr is not None:
+                g = scr.availableGeometry()
+                w = min(w, int(g.width() * 0.95))
+                h = min(h, int(g.height() * 0.92))
+        except Exception:
+            pass
+        self.resize(max(w, 720), max(h, 500))
+
+    @staticmethod
+    def _scroll(page):
+        """设置页放进可滚动区域:窗口/屏幕较小时内容滚动显示,
+        而不是被压扁成几像素高、文字互相重叠。"""
+        sa = QScrollArea()
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QFrame.NoFrame)
+        sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        page.setObjectName('tabPage')
+        page.setStyleSheet('QWidget#tabPage{background:white;}')
+        sa.setWidget(page)
+        sa.viewport().setStyleSheet('background:white;')
+        return sa
 
     def _build_input_card(self):
         gb = QGroupBox('①  选择压缩包 / 文件夹 / 文件')
         gb.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         lay = QVBoxLayout(gb); lay.setSpacing(8)
-        self.lst_inputs = QListWidget()
+        self.lst_inputs = _DropList(self._add_input)
+        self.lst_inputs.setMinimumHeight(90)
         self.lst_inputs.setAlternatingRowColors(True)
         self.lst_inputs.setSelectionMode(QListWidget.ExtendedSelection)
         self.lst_inputs.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -175,7 +272,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
 
     def _build_settings_card(self):
         gb = QGroupBox('③  分类设置')
-        lay = QVBoxLayout(gb); lay.setSpacing(0); lay.setContentsMargins(0, 20, 0, 0)
+        lay = QVBoxLayout(gb); lay.setSpacing(0); lay.setContentsMargins(0, 0, 0, 0)
         tabs = QTabWidget()
 
         # ── 名单 tab ──
@@ -222,7 +319,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         u3 = QRadioButton('不标注来源')
         self._rg_unit.addButton(u3, 2); ol.addWidget(u3)
         ol.addStretch()
-        tabs.addTab(to, '⚙ 分类选项')
+        tabs.addTab(self._scroll(to), '⚙ 分类选项')
 
         # ── 高级 tab(双列网格) ──
         ta = QWidget()
@@ -283,7 +380,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         b = QPushButton('选择'); b.setFixedHeight(30); b.clicked.connect(self._choose_pw)
         pwf.addWidget(b)
         al.addLayout(pwf)
-        tabs.addTab(ta, '🔧 高级功能')
+        tabs.addTab(self._scroll(ta), '🔧 高级功能')
 
         # ── 文件整理 tab ──
         tg = QWidget()
@@ -377,7 +474,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         sr.addWidget(self.btn_undo)
         gl.addLayout(sr)
         gl.addStretch()
-        tabs.addTab(tg, '📁 文件整理')
+        tabs.addTab(self._scroll(tg), '📁 文件整理')
         self._tabs = tabs
 
         lay.addWidget(tabs)
@@ -393,7 +490,9 @@ class MainWindow(OrganizeMixin, QMainWindow):
     # ---------- 输入操作 ----------
 
     def _add_input(self, path):
-        path = path.strip()
+        path = (path or '').strip()
+        if path:
+            path = os.path.normpath(path)
         if not path or path in self.inputs:
             return
         if os.path.isdir(path):
@@ -445,36 +544,17 @@ class MainWindow(OrganizeMixin, QMainWindow):
         menu.exec(self.lst_inputs.viewport().mapToGlobal(pos))
 
     def _setup_drop(self):
-        self.lst_inputs.setAcceptDrops(True)
-        self.setAcceptDrops(True)
+        """拖拽:拖到输入列表或窗口任意位置都可以。"""
+        self.setAcceptDrops(True)     # 列表本身见 _DropList
 
-        class DropList(QListWidget):
-            def __init__(self, parent, cb):
-                super().__init__(parent)
-                self._cb = cb
+    def dragEnterEvent(self, e):
+        _accept_urls(e)
 
-            def dragEnterEvent(self, e):
-                if e.mimeData().hasUrls():
-                    e.acceptProposedAction()
+    def dragMoveEvent(self, e):
+        _accept_urls(e)
 
-            def dropEvent(self, e):
-                for url in e.mimeData().urls():
-                    self._cb(url.toLocalFile())
-        # 替换 list widget 为支持拖拽的版本
-        old = self.lst_inputs
-        new = DropList(old.parentWidget(), self._add_input)
-        new.setAlternatingRowColors(True)
-        new.setSelectionMode(QListWidget.ExtendedSelection)
-        new.setContextMenuPolicy(Qt.CustomContextMenu)
-        new.customContextMenuRequested.connect(self._input_menu)
-        # 复制原有 layout 位置
-        parent_layout = old.parentWidget().layout()
-        if parent_layout:
-            idx = parent_layout.indexOf(old)
-            parent_layout.insertWidget(idx, new)
-            parent_layout.removeWidget(old)
-        old.deleteLater()
-        self.lst_inputs = new
+    def dropEvent(self, e):
+        _drop_urls(e, self._add_input)
 
     def _choose_out(self):
         d = QFileDialog.getExistingDirectory(self, '选择输出目录')
@@ -662,15 +742,37 @@ class MainWindow(OrganizeMixin, QMainWindow):
     # ---------- 日志 / 进度 ----------
 
     def _log(self, msg):
-        self.log.append(msg)
-        sb = self.log.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        """可在任意线程调用:先进缓冲,由主线程每 100ms 批量刷到日志框。"""
+        with self._log_lock:
+            self._log_buf.append(str(msg))
+        if in_main_thread():
+            self._flush_ui()
+
+    def _flush_ui(self):
+        """(主线程)把缓冲的日志和最新进度刷到界面。"""
+        with self._log_lock:
+            buf, self._log_buf = self._log_buf, []
+            prog, self._prog_state = self._prog_state, None
+        if buf:
+            if len(buf) > 5000:          # 一次涌入太多:只显示最后一段
+                buf = [f'…(省略 {len(buf) - 5000} 行,完整内容见输出目录的日志文件)'] \
+                    + buf[-5000:]
+            self.log.appendPlainText('\n'.join(buf))
+            sb = self.log.verticalScrollBar()
+            sb.setValue(sb.maximum())
+        if prog:
+            self._apply_progress(*prog)
 
     _PHASES = {'extract': ('解压', 0, 0.5), 'classify': ('匹配', 0.5, 0.2),
                'scan': ('扫描', 0.0, 0.15), 'health': ('体检', 0.15, 0.45),
                'place': ('归档', 0.7, 0.3)}
 
     def _on_progress(self, phase, cur, total):
+        """可在任意线程调用:只记下最新进度,由主线程定时刷新。"""
+        with self._log_lock:
+            self._prog_state = (phase, cur, total)
+
+    def _apply_progress(self, phase, cur, total):
         name, base, span = self._PHASES.get(phase, (phase, 0, 1))
         pct = int((base + cur / total * span if total else base) * 100)
         self.progress.setVisible(True)
@@ -681,34 +783,25 @@ class MainWindow(OrganizeMixin, QMainWindow):
     # ---------- 后台交互 ----------
 
     def _ask_password(self, archive_name, attempt):
-        from PySide6.QtCore import QEventLoop
-        loop = QEventLoop()
-        result = [None]
-
+        """后台线程调用:在主线程弹密码框,阻塞等待用户输入。"""
         def _prompt():
             if attempt > 1:
                 msg = f'密码错误,请重新输入。\n\n'
             else:
                 msg = f'该压缩包有密码。\n\n'
             msg += f'「{archive_name}」需要解压密码:\n(取消→放入"暂未解压")'
+            self._flush_ui()
             pwd, ok = QInputDialog.getText(
                 self, '需要解压密码', msg,
                 QLineEdit.Password, '')
-            result[0] = pwd if ok else None
-            loop.quit()
+            return pwd if ok else None
 
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, _prompt)
-        loop.exec()
-        return result[0]
+        return self._bridge.call_sync(_prompt)
 
     def _confirm_plan(self, plan):
-        from PySide6.QtCore import QEventLoop
-        loop = QEventLoop()
-        result = [False]
-        QTimer = __import__('PySide6.QtCore', fromlist=['QTimer']).QTimer
-
+        """后台线程调用:在主线程弹预览对话框,阻塞等待确认。"""
         def _show():
+            self._flush_ui()
             dlg = QDialog(self)
             dlg.setWindowTitle(f'预览归档计划(共 {len(plan)} 个文件)')
             dlg.resize(860, 520)
@@ -770,6 +863,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             lay.addWidget(btn_box)
             dlg._ok = False
             dlg.exec()
+            dlg.deleteLater()           # 在主线程销毁,见 __init__ 中 gc 的说明
             # 确认后把界面上的修改写回归档计划
             if dlg._ok:
                 for it, pi in rows:
@@ -783,13 +877,9 @@ class MainWindow(OrganizeMixin, QMainWindow):
                         if new_targets:
                             pi.targets = new_targets
                             pi.via += '·手改'
-            result[0] = dlg._ok
-            loop.quit()
+            return dlg._ok
 
-        from PySide6.QtCore import QTimer as _QTimer
-        _QTimer.singleShot(0, _show)
-        loop.exec()
-        return result[0]
+        return self._bridge.call_sync(_show)
 
     # ---------- 运行 ----------
 
@@ -909,10 +999,20 @@ class MainWindow(OrganizeMixin, QMainWindow):
         QMessageBox.information(self, '完成', msg)
 
     def _ui_call(self, fn):
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, fn)
+        """可在任意线程调用:先刷完日志/进度,再在主线程执行 fn。"""
+        def run():
+            self._flush_ui()
+            fn()
+        self._bridge.post(run)
 
     def closeEvent(self, event):
+        try:
+            self._ui_timer.stop()
+            self._gc_timer.stop()
+        except Exception:
+            pass
+        gc.collect()
+        gc.enable()
         conf.save_config(self._gather_cfg())
         event.accept()
 
