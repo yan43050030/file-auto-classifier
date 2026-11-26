@@ -20,11 +20,12 @@ DEFAULTS = {
     'out_fixed': False,          # 输出目录固定为归档库
     'short_names': True,         # 精简文件名(【单位】信息_姓名_证号)
     'layout_v46': True,          # 已完成 V4.6 布局迁移的标记
+    'pw_txt_v502': True,         # 已完成 V5.0.2 "txt 不默认当密码本" 迁移的标记
     'preview': True,             # 试运行预览(先看清单再执行),默认开更稳妥
     'content_match': False,
     'split_excel': False,
     'dedup': False,
-    'auto_pw_txt': True,
+    'auto_pw_txt': False,        # txt 也当候选密码本(默认关:txt 常常就是反馈材料)
     'pw_file': '',
     'delete_ok': False,
     'rules': [],                 # [{'rule_type':...,'value':...,'target':...,'enabled':...},...]
@@ -63,6 +64,9 @@ def load_config() -> dict:
             # V4.6 起推荐「按资料类型分」;老配置里的旧默认值迁移一次
             if 'layout_v46' not in saved and saved.get('unit_mode') == 'subfolder':
                 cfg['unit_mode'] = 'category'
+            # V5.0.2 起 txt 不再默认当密码本;老配置里的旧默认值迁移一次
+            if 'pw_txt_v502' not in saved:
+                cfg['auto_pw_txt'] = False
     except Exception:
         pass
     return cfg

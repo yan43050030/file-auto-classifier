@@ -270,3 +270,21 @@ def test_cancel_event(tmp_path):
             ask_password=lambda n, a: None,
             cancel_event=ev, done_cb=result.update)
     assert result['cancelled']
+
+
+def test_txt_files_always_classified_and_pw_file_excluded(tmp_path):
+    """txt 往往就是反馈材料:无论是否当候选密码本,都要照常分类;
+    只有专门指定的密码本文件不归档。"""
+    for auto in (False, True):
+        src = tmp_path / f'in{auto}'; src.mkdir()
+        (src / '张三_出入境记录.txt').write_text('张三 2023 出境', encoding='utf-8')
+        pw = src / '密码.txt'; pw.write_text('abc123\n', encoding='utf-8')
+        out = tmp_path / f'out{auto}'
+        run(JobOptions([str(src)], str(out), Roster.from_text('张三'),
+                       auto_pw_txt=auto, pw_files=[str(pw)], intelligent=False))
+        assert list(out.rglob('*张三_出入境记录.txt')), auto
+        assert not list(out.rglob('密码.txt')), auto
+
+
+def test_auto_pw_txt_default_off():
+    assert JobOptions([], '.', Roster([])).auto_pw_txt is False

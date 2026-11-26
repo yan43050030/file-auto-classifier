@@ -44,7 +44,7 @@ class JobOptions:
                  unit_mode='subfolder',          # category | subfolder | prefix | none
                  preview=False,
                  content_match=False, split_excel=False, dedup=False,
-                 auto_pw_txt=True, pw_files=None, delete_ok=False,
+                 auto_pw_txt=False, pw_files=None, delete_ok=False,
                  rules=None, intelligent=True,
                  intelligent_min_freq=10, intelligent_exclude=None,
                  auto_company=True, empty_detect=False,
@@ -125,12 +125,12 @@ def _collect_inputs(inputs, auto_pw_txt, log):
                     if kind:
                         archives.append(fp)
                     else:
-                        # 非压缩包的直接文件也要分类(但排除 txt 密码本)
+                        # 非压缩包的直接文件照常分类;txt 同时当候选密码本
+                        # (txt 也可能就是反馈材料,不能因为当了密码本就不分类)
                         if auto_pw_txt and f.lower().endswith('.txt'):
                             txt_paths.append(fp)
-                        else:
-                            loose_files.append((fp, folder_name))
-                            has_direct = True
+                        loose_files.append((fp, folder_name))
+                        has_direct = True
         elif os.path.isfile(p) and ex.is_archive(os.path.basename(p)):
             if ex.archive_kind(os.path.basename(p)) == 'volume-later':
                 log(f'  [提示] {os.path.basename(p)} 是分卷的后续卷,'
@@ -269,6 +269,10 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         # ---- 1. 收集输入(压缩包 + 非压缩包直接文件)与密码本 ----
         archives, loose_files, txt_paths = _collect_inputs(
             opts.inputs, opts.auto_pw_txt, tee)
+        # 你专门指定的密码本文件不当作材料归档
+        pw_abs = {os.path.normcase(os.path.abspath(p)) for p in opts.pw_files}
+        loose_files = [(fp, u) for fp, u in loose_files
+                       if os.path.normcase(os.path.abspath(fp)) not in pw_abs]
         txt_paths = list(opts.pw_files) + \
             [t for t in txt_paths if t not in opts.pw_files]
         if not archives and not loose_files:

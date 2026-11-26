@@ -424,3 +424,15 @@ def test_drop_anywhere_in_window_adds_inputs(win, app, tmp_path):
 def test_password_file_in_output_area(win):
     # 密码本输入框在「② 保存到」区域,和同步按钮在一起
     assert win.txt_pwfile.parentWidget() is win.btn_sync.parentWidget()
+
+
+def test_txt_password_option_off_and_migrated(win, tmp_path, monkeypatch):
+    import json
+    from fac import config as conf
+    assert win._ck['auto_pw_txt'].isChecked() is False
+    p = tmp_path / 'old.json'
+    p.write_text(json.dumps({'auto_pw_txt': True}), encoding='utf-8')   # 老配置
+    monkeypatch.setattr(conf, 'CONF_FILE', str(p))
+    assert conf.load_config()['auto_pw_txt'] is False
+    p.write_text(json.dumps({'auto_pw_txt': True, 'pw_txt_v502': True}), encoding='utf-8')
+    assert conf.load_config()['auto_pw_txt'] is True      # 迁移后自己再打开 → 尊重

@@ -13,7 +13,7 @@
 - **多格式**:zip(含 **AES 加密**,通过 pyzipper)/ 7z / rar / tar / tar.gz / gz;内置官方 UnRAR.exe,打包成 exe 后目标电脑无需安装 WinRAR。
 - **多级嵌套**:压缩包里套压缩包(最多 5 层)自动递归解压。
 - **分卷识别**:`.part1.rar` 自动带出后续卷、`.7z.001` 分卷直接支持,后续卷不再误报失败。
-- **加密压缩包**:密码本自动尝试(输入文件夹里的 txt 自动识别,兼容 `文件名: 密码` 等格式),失败再弹框;验证密码只解压包内最小的一个文件,大包不再整包试错。
+- **加密压缩包**:密码本自动尝试(在「🔑 密码本」指定 txt,兼容 `文件名: 密码` 等格式),失败再弹框;验证密码只解压包内最小的一个文件,大包不再整包试错。
 - **安全**:防 zip slip 路径穿越;Windows 超长路径(>260 字符)自动处理;解压失败的包收进"解压失败"文件夹,绝不悄悄丢文件。
 
 ### 分类
@@ -86,7 +86,7 @@ python 文件自动分类工具.py -i a.zip b.rar -o out --kw 张三 --kw "李�
 ```bash
 pip install pyinstaller -r requirements.txt
 
-pyinstaller --onefile --windowed --name 文件自动分类工具V5.0.1 ^
+pyinstaller --onefile --windowed --name 文件自动分类工具V5.0.2 ^
   --icon app.ico --add-data "app.ico;." --add-binary "UnRAR.exe;." ^
   --collect-submodules py7zr --collect-submodules rarfile --collect-submodules pyzipper ^
   --collect-submodules send2trash --collect-submodules openpyxl ^
@@ -95,7 +95,7 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V5.0.1 ^
   文件自动分类工具.py
 ```
 
-生成的 `dist/文件自动分类工具V5.0.1.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
+生成的 `dist/文件自动分类工具V5.0.2.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
 (如不需要 Word/PDF 内容匹配,可不装 python-docx / pdfplumber,体积更小。)
 
 > 每次发版由 GitHub Actions 在 Windows 环境自动跑完测试后打包,

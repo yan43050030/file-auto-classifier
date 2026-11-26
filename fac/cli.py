@@ -72,8 +72,10 @@ def build_parser():
                    help='同一人员文件夹内按内容去重(跨单位重复反馈只留一份)')
     p.add_argument('--pw-file', action='append', default=[], metavar='txt',
                    help='密码本 txt(可重复)')
+    p.add_argument('--auto-pw-txt', action='store_true',
+                   help='把输入文件夹里的 txt 也当候选密码本(默认关;txt 仍照常分类)')
     p.add_argument('--no-auto-pw-txt', action='store_true',
-                   help='不自动把输入文件夹里的 txt 当密码本')
+                   help=argparse.SUPPRESS)          # 兼容旧参数,现在本就默认关闭
     p.add_argument('--delete-ok', action='store_true',
                    help='完成后删除已成功解压的原始压缩包(移入回收站)')
     p.add_argument('--no-smart', action='store_true',
@@ -261,7 +263,7 @@ def main(argv=None):
         unit_mode=args.unit_mode,
         content_match=args.content_match, split_excel=args.split_excel,
         dedup=args.dedup,
-        auto_pw_txt=not args.no_auto_pw_txt, pw_files=args.pw_file,
+        auto_pw_txt=args.auto_pw_txt and not args.no_auto_pw_txt, pw_files=args.pw_file,
         delete_ok=args.delete_ok,
         intelligent=not args.no_smart,
         intelligent_min_freq=args.smart_min_freq,

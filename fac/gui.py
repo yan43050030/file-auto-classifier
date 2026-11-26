@@ -388,7 +388,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             ('split_excel', 'Excel 按人拆分:多人表按行拆每人一份(原表保留)', False),
             ('dedup', '内容去重:同文件夹内文件只留一份', False),
             ('intelligent', '智能识别:自动发现人名(排除机构/地名/职务),推测姓名↔证号', True),
-            ('auto_pw_txt', '自动把 .txt 当密码本', True),
+            ('auto_pw_txt', '把输入文件夹里的 .txt 也当候选密码本(txt 仍照常分类)', False),
             ('delete_ok', '⚠ 成功后删除压缩包(移入回收站)', False),
         ]
         for idx, (key, label, default) in enumerate(ck_specs):
@@ -839,6 +839,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             'out_fixed': self.ck_out_fixed.isChecked(),
             'short_names': self.ck_short.isChecked(),
             'layout_v46': True,
+            'pw_txt_v502': True,
             'pw_file': self.txt_pwfile.text().strip(),
             'rules': [r.to_dict() for r in self._get_rules()],
             'intelligent_min_freq': self.spin_minfreq.value(),
