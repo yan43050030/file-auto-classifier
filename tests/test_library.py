@@ -265,3 +265,56 @@ def test_user_scenario_batches_marks_and_full_reimport(tmp_path):
     for p, t in snapshot.items():                            # 标记过的文件一个没动
         assert p.exists() and p.stat().st_mtime == t, p
     assert len(list(out.rglob('*.xlsx'))) == 5 + 3 + 1       # 流水 8 个 + 核对表 1 个
+
+
+def test_preview_reassignment_not_reimported(tmp_path):
+    """预览里把文件手动改归到别人名下;以后重新导入同一批,不能又按自动结果放回原人。"""
+    from fac.idcard import check_digit as cd
+    id2 = '32010219851212001' + cd('32010219851212001')
+    roster = f'张三,{ID}\n李四,{id2}'
+    src = tmp_path / 'in'; src.mkdir()
+    with zipfile.ZipFile(src / '工商银行.zip', 'w') as z:
+        z.writestr('张三_账户情况.txt', '其实是李四的材料' * 5)
+        z.writestr('张三_户籍.txt', '户籍' * 5)
+    out = tmp_path / 'out'
+
+    def reassign(plan):
+        for it in plan:
+            if it.fname == '张三_账户情况.txt':
+                it.targets = [f'李四_{id2}']           # 手动改归
+        return True
+
+    def go(confirm):
+        r = {}
+        run_job(JobOptions([str(src)], str(out), Roster.from_text(roster),
+                           unit_mode='category', intelligent=False, preview=True),
+                log=lambda m: None, progress=lambda *a: None,
+                ask_password=lambda n, a: None, confirm_cb=confirm, done_cb=r.update)
+        return r
+
+    go(reassign)
+    assert list((out / f'李四_{id2}').rglob('*张三_账户情况.txt'))
+    r = go(lambda plan: True)                         # 重新导入,不再手改
+    assert r['reimport_skipped'] == 2
+    assert not list((out / f'张三_{ID}').rglob('*账户情况*'))   # 没有被放回张三
+
+
+def test_manual_move_to_other_person_and_delete_not_reimported(tmp_path):
+    """归档后在资源管理器里:把文件挪到别人文件夹、删掉不要的文件;重新导入都不会再放回来。"""
+    import shutil
+    from fac.idcard import check_digit as cd
+    id2 = '32010219851212001' + cd('32010219851212001')
+    roster = f'张三,{ID}\n李四,{id2}'
+    batch = {'工商银行.zip': {'张三_账户情况.txt': '其实是李四的' * 5,
+                              '张三_无用回执.txt': '无关内容' * 5,
+                              '张三_户籍.txt': '户籍' * 5}}
+    out = tmp_path / 'out'
+    run(batch, out, roster)
+    a = out / f'张三_{ID}'
+    f = next(a.rglob('*账户情况*'))
+    (out / f'李四_{id2}' / '其他数据').mkdir(parents=True)
+    shutil.move(str(f), str(out / f'李四_{id2}' / '其他数据' / f.name))   # 挪给李四
+    next(a.rglob('*无用回执*')).unlink()                                   # 删掉不要的
+    _l, r = run(batch, out, roster)
+    assert r['reimport_skipped'] == 3
+    assert not list(a.rglob('*账户情况*')) and not list(a.rglob('*无用回执*'))

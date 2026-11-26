@@ -79,7 +79,7 @@ class JobOptions:
 
 class PlanItem:
     __slots__ = ('src', 'fname', 'unit', 'action', 'targets', 'persons', 'via',
-                 'empty', 'category', 'new_name')
+                 'empty', 'category', 'new_name', 'auto_targets')
 
     def __init__(self, src, fname, unit, action, targets, persons=None, via=''):
         self.src = src            # 临时目录里的文件路径
@@ -92,6 +92,7 @@ class PlanItem:
         self.empty = ''           # 非空 = 疑似空值的原因(放入 目标/疑似空值/)
         self.category = ''        # 资料类型(银行流水/其他数据),unit_mode=category 时用
         self.new_name = ''        # 精简后的文件名(预览显示用;实际以存放时为准)
+        self.auto_targets = []    # 预览手改之前的自动分类结果(防重复导入用)
 
     def display_target(self):
         if self.action == 'split':
@@ -203,7 +204,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
     # 归档库:输出目录里已有的人员/企业文件夹 + 历次归档记录(支持反复导入新反馈)
     lib = Library(opts.out_dir, log=tee)
 
-    def place(src, fname, unit, folder, move, sub='', category=''):
+    def place(src, fname, unit, folder, move, sub='', category='', auto=''):
         """把 src 放入 out/folder[/…],按 unit_mode 组织。返回是否实际放入。
 
         unit_mode=category:  人员/企业/【疑似空值|银行流水|其他数据】/【单位】文件名
@@ -225,8 +226,10 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             if unit and opts.unit_mode == 'subfolder':
                 base = os.path.join(base, safe_folder_name(label or unit))
         # 重复导入:同一单位、同名、同内容的文件已经在归档库里 → 跳过
+        auto = lib.resolve(auto) if auto else ''
         dup, digest = lib.already_imported(folder, unit or '', fname, src,
-                                           os.path.join(base, name))
+                                           os.path.join(base, name),
+                                           auto_folder=auto)
         if dup:
             summary['reimport_skipped'] += 1
             if summary['reimport_skipped'] <= 20:
@@ -252,7 +255,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         else:
             shutil.copy2(long_path(src), long_path(dst))
         lib.record(folder, unit or '', fname, digest, cat, sub == BUCKET_EMPTY,
-                   os.path.relpath(dst, opts.out_dir))
+                   os.path.relpath(dst, opts.out_dir), auto_folder=auto)
         key = (folder, unit or '')
         matrix[key] = matrix.get(key, 0) + 1
         if sub == BUCKET_EMPTY:
@@ -471,6 +474,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 continue
             before = list(item.targets)
             item.targets = [lib.resolve(t) for t in item.targets]
+            item.auto_targets = list(item.targets)
             if item.targets != before:
                 summary['merged_into'] += 1
             if opts.unit_mode == 'category' and not item.empty and \
@@ -499,10 +503,13 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                     _do_split(item, opts, place, tee, tmp)
                 else:
                     sub = BUCKET_EMPTY if item.empty else ''
+                    autos = item.auto_targets or []
                     for j, t in enumerate(item.targets):
                         last = (j == len(item.targets) - 1)
                         place(item.src, item.fname, item.unit, t, move=last,
-                              sub=sub, category=item.category)
+                              sub=sub, category=item.category,
+                              auto=autos[j] if j < len(autos) else
+                              (autos[0] if autos else ''))
                 summary['files'] += 1
             except Exception as e:
                 tee(f'  [错误] 归档失败 {item.fname}: {e}')

@@ -86,8 +86,11 @@ class Library:
                 while f in renames and f not in seen:
                     seen.add(f)
                     f = renames[f]
-                self._imported.add((self._who(f), unit_key(rec.get('unit')),
-                                    rec.get('name'), rec.get('sha1')))
+                k = (unit_key(rec.get('unit')), rec.get('name'), rec.get('sha1'))
+                self._imported.add((self._who(f),) + k)
+                if rec.get('auto'):
+                    # 预览里手动改归过:按"自动分类结果"也记一份,重新导入时认得出
+                    self._imported.add((self._who(rec['auto']),) + k)
 
     @staticmethod
     def _who(folder):
@@ -166,7 +169,8 @@ class Library:
 
     # ---------- 重复导入 ----------
 
-    def already_imported(self, folder, unit, name, src, dst_candidate=None):
+    def already_imported(self, folder, unit, name, src, dst_candidate=None,
+                         auto_folder=''):
         """同一单位、同名、同内容的文件已经导入过 → True(跳过)。
 
         有归档记录时按记录判断;老版本生成的目录没有记录,则看目标位置
@@ -175,7 +179,10 @@ class Library:
             digest = sha1_of(src)
         except OSError:
             return False, ''
-        if (self._who(folder), unit_key(unit), name, digest) in self._imported:
+        k = (unit_key(unit), name, digest)
+        if (self._who(folder),) + k in self._imported:
+            return True, digest
+        if auto_folder and (self._who(auto_folder),) + k in self._imported:
             return True, digest
         if dst_candidate and os.path.isfile(long_path(dst_candidate)):
             try:
@@ -210,11 +217,17 @@ class Library:
         except OSError:
             pass
 
-    def record(self, folder, unit, name, digest, category, empty, rel_path):
-        self._imported.add((self._who(folder), unit_key(unit), name, digest))
-        self._append({'type': 'file', 'folder': folder, 'unit': unit,
-                      'name': name, 'sha1': digest, 'category': category,
-                      'empty': bool(empty), 'path': rel_path})
+    def record(self, folder, unit, name, digest, category, empty, rel_path,
+               auto_folder=''):
+        k = (unit_key(unit), name, digest)
+        self._imported.add((self._who(folder),) + k)
+        rec = {'type': 'file', 'folder': folder, 'unit': unit,
+               'name': name, 'sha1': digest, 'category': category,
+               'empty': bool(empty), 'path': rel_path}
+        if auto_folder and auto_folder != folder:
+            self._imported.add((self._who(auto_folder),) + k)
+            rec['auto'] = auto_folder          # 自动分类本来要放的位置(手动改归过)
+        self._append(rec)
 
     def file_records(self):
         """全部文件记录(已套用文件夹改名),供《文件名对照表》使用。"""

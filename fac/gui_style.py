@@ -104,6 +104,12 @@ QTreeWidget {{
     font-size: 12px; alternate-background-color: #F8FAFC;
 }}
 QTreeWidget::item:selected {{ background: {PRIMARY}; color: white; }}
+QTreeWidget::item {{ min-height: 26px; padding: 0 2px; }}
+/* 表格里双击编辑时的输入框:不能套用普通输入框的大内边距,否则文字被挤成一条细线 */
+QTreeView QLineEdit, QTableView QLineEdit, QListView QLineEdit {{
+    padding: 0 4px; margin: 0; border: 1px solid {PRIMARY}; border-radius: 2px;
+    font-size: 13px; background: white; color: {TEXT};
+}}
 QHeaderView::section {{
     background: #F1F5F9; border: none; border-bottom: 1px solid {BORDER};
     padding: 6px 10px; font-size: 12px; font-weight: 600;
