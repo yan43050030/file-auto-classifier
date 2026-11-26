@@ -156,7 +156,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         btn_row = QHBoxLayout(); btn_row.setSpacing(12)
         self.btn_run = QPushButton('▶  开始分类')
         self.btn_run.setObjectName('btnRun')
-        self.btn_run.setMinimumHeight(44)
+        self.btn_run.setMinimumHeight(48)
         self.btn_run.clicked.connect(self._start)
         btn_row.addWidget(self.btn_run)
         self.btn_cancel = QPushButton('取消')
@@ -175,7 +175,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.progress.setVisible(False)
         bl.addWidget(self.progress)
         self.lbl_prog = QLabel('')
-        self.lbl_prog.setStyleSheet(f'color:{TEXT_SEC};font-size:11px;')
+        self.lbl_prog.setStyleSheet(f'color:{TEXT_SEC};font-size:12px;')
         self.lbl_prog.setVisible(False)
         bl.addWidget(self.lbl_prog)
         # QPlainTextEdit + 行数上限:文件特别多时日志也不会把界面拖慢
@@ -185,7 +185,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.log.setMaximumBlockCount(5000)
         self.log.setStyleSheet(
             f'QPlainTextEdit{{font-family:Consolas,"Microsoft YaHei UI";'
-            f'font-size:11px;background:{CARD_BG};border:1px solid {BORDER};'
+            f'font-size:12px;background:{CARD_BG};border:1px solid {BORDER};'
             f'border-radius:6px;padding:8px;}}')
         self.log.setMinimumHeight(80)
         bl.addWidget(self.log, 1)    # stretch=1 随窗口缩放
@@ -244,16 +244,16 @@ class MainWindow(OrganizeMixin, QMainWindow):
         for txt, slot in [('添加压缩包', self._add_archives),
                           ('添加文件夹', self._add_folder),
                           ('添加文件', self._add_files)]:
-            b = QPushButton(txt); b.setFixedHeight(30); b.clicked.connect(slot)
+            b = QPushButton(txt); b.setFixedHeight(34); b.clicked.connect(slot)
             br.addWidget(b)
-        b = QPushButton('移除选中'); b.setFixedHeight(30); b.clicked.connect(self._rm_inputs)
+        b = QPushButton('移除选中'); b.setFixedHeight(34); b.clicked.connect(self._rm_inputs)
         br.addWidget(b)
-        b = QPushButton('清空'); b.setFixedHeight(30); b.clicked.connect(self._clr_inputs)
+        b = QPushButton('清空'); b.setFixedHeight(34); b.clicked.connect(self._clr_inputs)
         br.addWidget(b)
         br.addStretch()
         lay.addLayout(br)
         lbl = QLabel('💡 支持拖拽文件/文件夹到上方列表')
-        lbl.setStyleSheet(f'color:{TEXT_SEC};font-size:11px;')
+        lbl.setStyleSheet(f'color:{TEXT_SEC};font-size:12px;')
         lay.addWidget(lbl)
         self._setup_drop()
         return gb
@@ -279,7 +279,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.txt_out.textEdited.connect(
             lambda _t: setattr(self, '_out_manual', bool(_t.strip())))
         r.addWidget(self.txt_out)
-        b = QPushButton('浏览'); b.setFixedHeight(32); b.clicked.connect(self._choose_out)
+        b = QPushButton('浏览'); b.setFixedHeight(34); b.clicked.connect(self._choose_out)
         r.addWidget(b)
         lay.addLayout(r)
         self.ck_out_fixed = QCheckBox('固定此目录为归档库(以后的新反馈都合并到这里)')
@@ -289,6 +289,12 @@ class MainWindow(OrganizeMixin, QMainWindow):
             '反馈核对表按历次导入累计。')
         self.ck_out_fixed.toggled.connect(self._on_out_fixed)
         lay.addWidget(self.ck_out_fixed)
+        sr = QHBoxLayout(); sr.setSpacing(6)
+        self.btn_sync = QPushButton('🔄 同步归档记录')
+        self.btn_sync.clicked.connect(self._sync_library)
+        sr.addWidget(self.btn_sync)
+        sr.addStretch()
+        lay.addLayout(sr)
         lay.addStretch()
         return gb
 
@@ -304,11 +310,11 @@ class MainWindow(OrganizeMixin, QMainWindow):
         for txt, slot in [('从 Excel 导入...', self._import_roster),
                           ('保存模板...', self._save_tpl),
                           ('加载模板...', self._load_tpl)]:
-            b = QPushButton(txt); b.setFixedHeight(30); b.clicked.connect(slot)
+            b = QPushButton(txt); b.setFixedHeight(34); b.clicked.connect(slot)
             rb.addWidget(b)
         rb.addStretch()
         self.lbl_roster = QLabel('')
-        self.lbl_roster.setStyleSheet(f'color:{TEXT_SEC};font-size:11px;')
+        self.lbl_roster.setStyleSheet(f'color:{TEXT_SEC};font-size:12px;')
         rb.addWidget(self.lbl_roster)
         tl.addLayout(rb)
         self.txt_roster = QPlainTextEdit()
@@ -355,7 +361,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
                      '第123456号_保险信息.xlsx → 保险信息_张三_2303….xlsx;'
                      '原名记入《文件名对照表》,不影响重复导入识别')
         tip.setWordWrap(True)
-        tip.setStyleSheet(f'color:{TEXT_SEC};font-size:11px;margin-left:22px;')
+        tip.setStyleSheet(f'color:{TEXT_SEC};font-size:12px;margin-left:22px;')
         ol.addWidget(tip)
         ol.addStretch()
         tabs.addTab(self._scroll(to), '⚙ 分类选项')
@@ -430,7 +436,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
 
         rb2 = QHBoxLayout(); rb2.setSpacing(8)
         for txt, slot in [('+ 添加规则', self._add_rule), ('- 移除此规则', self._del_rule)]:
-            b = QPushButton(txt); b.setFixedHeight(30); b.clicked.connect(slot)
+            b = QPushButton(txt); b.setFixedHeight(34); b.clicked.connect(slot)
             rb2.addWidget(b)
         rb2.addStretch(); al.addLayout(rb2)
         al.addWidget(self._sep())
@@ -439,7 +445,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         pwf.addWidget(QLabel('额外密码本:'))
         self.txt_pwfile = QLineEdit()
         pwf.addWidget(self.txt_pwfile)
-        b = QPushButton('选择'); b.setFixedHeight(30); b.clicked.connect(self._choose_pw)
+        b = QPushButton('选择'); b.setFixedHeight(34); b.clicked.connect(self._choose_pw)
         pwf.addWidget(b)
         al.addLayout(pwf)
         tabs.addTab(self._scroll(ta), '🔧 高级功能')
@@ -464,7 +470,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         lr.addWidget(self.cmb_layout, 1)
         gl.addLayout(lr)
         ph = QLabel('可用占位符: {类别} {年} {年月} {来源} {扩展名}(可直接编辑组合)')
-        ph.setStyleSheet(f'color:{TEXT_SEC}; font-size:11px;')
+        ph.setStyleSheet(f'color:{TEXT_SEC}; font-size:12px;')
         gl.addWidget(ph)
         gl.addWidget(self._sep())
 
@@ -508,7 +514,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         dr.addWidget(self.spin_mindup)
         _t = QLabel('(小于此体积的文件不查重 —— 空模板/配置文件内容相同是常态,'
                     '误判成重复反而添乱;填 0 则不限)')
-        _t.setStyleSheet(f'color:{TEXT_SEC}; font-size:11px;')
+        _t.setStyleSheet(f'color:{TEXT_SEC}; font-size:12px;')
         _t.setWordWrap(True)
         dr.addWidget(_t, 1)
         gl.addLayout(dr)
@@ -523,15 +529,15 @@ class MainWindow(OrganizeMixin, QMainWindow):
         sr.addWidget(self.spin_large)
         sr.addStretch()
         self.btn_hist = QPushButton('🔍 查整理历史')
-        self.btn_hist.setFixedHeight(30)
+        self.btn_hist.setFixedHeight(34)
         self.btn_hist.clicked.connect(self._search_history)
         sr.addWidget(self.btn_hist)
         self.btn_purge = QPushButton('🗑 清理「可清理/重复/旧版本」')
-        self.btn_purge.setFixedHeight(30)
+        self.btn_purge.setFixedHeight(34)
         self.btn_purge.clicked.connect(self._purge_now)
         sr.addWidget(self.btn_purge)
         self.btn_undo = QPushButton('↩ 撤销上次整理')
-        self.btn_undo.setFixedHeight(30)
+        self.btn_undo.setFixedHeight(34)
         self.btn_undo.clicked.connect(self._undo_last)
         sr.addWidget(self.btn_undo)
         gl.addLayout(sr)
@@ -580,6 +586,43 @@ class MainWindow(OrganizeMixin, QMainWindow):
         else:
             name = '分类结果'
         self.txt_out.setText(os.path.join(base, name))
+
+    def _sync_library(self):
+        """把你在结果目录里手动做的调整(挪动/改名/删除)写进归档记录,
+        并刷新反馈核对表与文件名对照表。"""
+        from .library import Library, LEDGER_NAME
+        from .report import write_matrix_report, write_name_map
+        out = self.txt_out.text().strip()
+        if not out or not os.path.isfile(os.path.join(out, LEDGER_NAME)):
+            QMessageBox.information(
+                self, '提示', '输出目录里没有归档记录(归档记录.jsonl)。\n'
+                              '请先选择按人归档的结果目录。')
+            return
+        self._begin_job()
+
+        def work():
+            lib = Library(out, log=self._log)
+            st = lib.sync(self._cancel)
+            cum, cum_empty = lib.cumulative_matrix()
+            write_matrix_report(out, cum, self._log, empty=cum_empty)
+            write_name_map(out, lib.file_records(), self._log)
+            self._ui_call(lambda: self._on_sync_done(st))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_sync_done(self, st):
+        self.btn_run.setEnabled(True)
+        self._on_mode_changed()
+        self.btn_cancel.setEnabled(False)
+        self.progress.setVisible(False)
+        self.lbl_prog.setVisible(False)
+        QMessageBox.information(
+            self, '同步完成',
+            f'已核对 {st["checked"]} 个已归档文件:\n'
+            f'· 你挪动/改名过的 {st["moved"]} 个,已更新到新位置\n'
+            f'· 已不在归档库里的 {st["gone"]} 个,记为已删除\n'
+            f'· 你手动放进来、未登记的 {st["unregistered"]} 个,保持原样\n\n'
+            f'反馈核对表、文件名对照表已同步更新。以后导入新反馈前也会自动同步。')
 
     def _on_out_fixed(self, on):
         # 勾上:固定不动;取消:恢复跟随最后添加的压缩包
@@ -1027,7 +1070,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.lbl_banner.setText(text)
         self.lbl_banner.setStyleSheet(
             f'QLabel#modeBanner{{background:{bg};color:{fg};border:1px solid {border};'
-            f'border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;}}')
+            f'border-radius:8px;padding:8px 14px;font-size:14px;font-weight:600;}}')
         # 开始按钮:按人归档蓝色,文件整理橙色
         self.btn_run.setProperty('mode', 'organize' if organize else 'person')
         self.btn_run.style().unpolish(self.btn_run)

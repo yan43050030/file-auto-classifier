@@ -264,7 +264,13 @@ def test_user_scenario_batches_marks_and_full_reimport(tmp_path):
         ['【第1批_公安户籍】赵六_人口和户籍信息.txt', '【第3批_铁路】赵六_铁路总公司票面信息.txt']
     for p, t in snapshot.items():                            # 标记过的文件一个没动
         assert p.exists() and p.stat().st_mtime == t, p
-    assert len(list(out.rglob('*.xlsx'))) == 5 + 3 + 1       # 流水 8 个 + 核对表 1 个
+    material = [p for p in out.rglob('*.xlsx') if p.parent != out]
+    assert len(material) == 5 + 3                            # 流水 8 个,没有多出副本
+    # 你挪动/改名的文件已同步进记录:对照表里是现在的位置
+    st = Library(str(out)).current_files()
+    paths = {v['path'] for v in st.values()}
+    assert any('有100万元待查_' in p for p in paths)
+    assert any(os.sep + '重点' + os.sep in p for p in paths)
 
 
 def test_preview_reassignment_not_reimported(tmp_path):
@@ -318,3 +324,41 @@ def test_manual_move_to_other_person_and_delete_not_reimported(tmp_path):
     _l, r = run(batch, out, roster)
     assert r['reimport_skipped'] == 3
     assert not list(a.rglob('*账户情况*')) and not list(a.rglob('*无用回执*'))
+
+
+def test_sync_updates_moves_renames_edits_and_deletes(tmp_path):
+    import shutil
+    from fac.idcard import check_digit as cd
+    from fac.report import write_name_map
+    id2 = '32010219851212001' + cd('32010219851212001')
+    roster = f'张三,{ID}\n李四,{id2}'
+    out = tmp_path / 'out'
+    run({'工商银行.zip': {'张三_流水.txt': 'A' * 50, '张三_户籍.txt': 'B' * 50,
+                          '张三_回执.txt': 'C' * 50, '张三_开户.txt': 'D' * 50}}, out, roster)
+    a = out / f'张三_{ID}'
+    f1 = next(a.rglob('*流水*.txt')); f1.rename(f1.with_name('重点_' + f1.name))      # 改名
+    f2 = next(a.rglob('*户籍*.txt'))
+    (out / f'李四_{id2}' / '其他数据').mkdir(parents=True)
+    shutil.move(str(f2), str(out / f'李四_{id2}' / '其他数据' / f2.name))      # 挪给李四
+    f3 = next(a.rglob('*开户*.txt'))
+    g3 = f3.with_name(f3.stem + '_已核' + f3.suffix); f3.rename(g3)
+    g3.write_text('D' * 50 + '批注', encoding='utf-8')                         # 改名+改内容
+    next(a.rglob('*回执*.txt')).unlink()                                           # 删除
+    (a / '其他数据' / '我自己放的.txt').write_text('x', encoding='utf-8')        # 手动新增
+    lib = Library(str(out))
+    st = lib.sync()
+    assert st == {'moved': 3, 'gone': 1, 'unregistered': 1, 'checked': 4}
+    cur = {v['name']: v for v in lib.current_files().values()}
+    assert os.path.basename(cur['张三_流水.txt']['path']).startswith('重点_')
+    assert cur['张三_户籍.txt']['folder'] == f'李四_{id2}'
+    assert cur['张三_开户.txt']['path'].endswith('_已核.txt')
+    assert cur['张三_回执.txt']['gone']
+    m, _e = lib.cumulative_matrix()
+    assert m[(f'李四_{id2}', '工商银行')] == 1 and m[(f'张三_{ID}', '工商银行')] == 3
+    # 再同步一次:没有新变化
+    assert Library(str(out)).sync() == {'moved': 0, 'gone': 0, 'unregistered': 1, 'checked': 3}
+    # 对照表标出已删除
+    p = write_name_map(str(out), Library(str(out)).file_records())
+    wb = openpyxl.load_workbook(p)
+    rows = [[c.value for c in r] for r in wb.active.iter_rows()]
+    assert any(r[2] == '张三_回执.txt' and r[5] == '已删除/找不到' for r in rows)

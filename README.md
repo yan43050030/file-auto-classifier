@@ -23,6 +23,7 @@
 - **身份证号识别**:未命中名单的文件,按文件名中的身份证号自动归类;18 位号码做 **GB 11643 校验位验证**(订单号等 18 位数字不再误判),支持 15 位老号码并自动与 18 位互认。
 - **一人一个文件夹,按资料类型细分**:同一人/企业不管分几个压缩包、几次反馈,都归进同一个文件夹,里面分「疑似空值 / 银行流水 / 其他数据」,来源单位写成文件名前缀【单位】(旧的"按单位建子文件夹"仍可选)。
 - **精简文件名(可选,默认开)**:「【单位】信息_姓名_证号」,去掉文号/批次号/乱码,原名记入《文件名对照表》,不影响重复导入识别。
+- **同步归档记录**:在结果目录里手动挪动/改名/删除文件后一键同步(导入前也自动同步),核对表、文件名对照表始终反映现在的实际位置。
 - **归档库(可反复导入)**:新反馈直接导入到原结果目录 —— 同一人/企业并入原文件夹(按证号/信用代码、名称对齐,只有名字的旧文件夹会补全为「姓名_证号」),重复导入的相同文件自动跳过,反馈核对表按历次导入累计;可「固定此目录为归档库」。
 - **反馈核对表**:自动生成"人员 × 单位"矩阵(CSV + xlsx,空格标黄),哪个单位没反馈哪个人一目了然。
 - **内容匹配(可选)**:文件名未命中时,读取 Excel / Word / PDF / 文本内容查找名单中的人;支持旧版 .doc / .xls(Office 97-2003);智能识别与身份证号兜底同样作用于内容。
@@ -85,7 +86,7 @@ python 文件自动分类工具.py -i a.zip b.rar -o out --kw 张三 --kw "李�
 ```bash
 pip install pyinstaller -r requirements.txt
 
-pyinstaller --onefile --windowed --name 文件自动分类工具V4.7.1 ^
+pyinstaller --onefile --windowed --name 文件自动分类工具V5.0 ^
   --icon app.ico --add-data "app.ico;." --add-binary "UnRAR.exe;." ^
   --collect-submodules py7zr --collect-submodules rarfile --collect-submodules pyzipper ^
   --collect-submodules send2trash --collect-submodules openpyxl ^
@@ -94,7 +95,7 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V4.7.1 ^
   文件自动分类工具.py
 ```
 
-生成的 `dist/文件自动分类工具V4.7.1.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
+生成的 `dist/文件自动分类工具V5.0.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
 (如不需要 Word/PDF 内容匹配,可不装 python-docx / pdfplumber,体积更小。)
 
 > 每次发版由 GitHub Actions 在 Windows 环境自动跑完测试后打包,

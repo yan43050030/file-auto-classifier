@@ -20,6 +20,12 @@ from .util import long_path, sha1_of
 LEDGER_NAME = '归档记录.jsonl'
 # 这些是工具自己的功能文件夹,不是人员/企业
 SPECIAL_FOLDERS = {'未分类', '解压失败', '暂未解压', '原始反馈'}
+# 结果目录顶层的工具自身文件(不是归档的材料)
+_TOOL_FILES = ('反馈核对表', '文件名对照表', '分类日志_', '整理台账_', '整理报告', '整理历史')
+
+
+def _top(rel):
+    return rel.replace('\\', '/').split('/')[0]
 
 
 def _is_code(s):
@@ -221,7 +227,9 @@ class Library:
                auto_folder=''):
         k = (unit_key(unit), name, digest)
         self._imported.add((self._who(folder),) + k)
-        rec = {'type': 'file', 'folder': folder, 'unit': unit,
+        self._seq = getattr(self, '_seq', 0) + 1
+        rec = {'type': 'file', 'id': f'{datetime.datetime.now():%Y%m%d%H%M%S%f}-{self._seq}',
+               'folder': folder, 'unit': unit,
                'name': name, 'sha1': digest, 'category': category,
                'empty': bool(empty), 'path': rel_path}
         if auto_folder and auto_folder != folder:
@@ -229,45 +237,129 @@ class Library:
             rec['auto'] = auto_folder          # 自动分类本来要放的位置(手动改归过)
         self._append(rec)
 
+    # ---------- 当前状态(折叠归档记录) ----------
+
+    def current_files(self):
+        """把归档记录按时间顺序折叠成"每个文件现在的状态"。
+
+        事件:file(导入)/ rename(工具补全文件夹名)/
+              move(同步时发现被你挪动或改名)/ gone(同步时发现已被你删除)。
+        返回 {记录id: {folder, unit, name, sha1, path, category, empty, auto, gone, time}}。"""
+        state = {}
+        for rec in self._read_ledger():
+            t = rec.get('type')
+            if t == 'file':
+                rid = rec.get('id') or rec.get('path')
+                state[rid] = {'folder': rec.get('folder'), 'unit': rec.get('unit') or '',
+                              'name': rec.get('name') or '', 'sha1': rec.get('sha1'),
+                              'path': rec.get('path') or '', 'category': rec.get('category', ''),
+                              'empty': bool(rec.get('empty')), 'auto': rec.get('auto', ''),
+                              'gone': False, 'time': rec.get('time', '')}
+            elif t == 'rename':
+                old, new = rec.get('from'), rec.get('to')
+                for st in state.values():
+                    if st['folder'] == old:
+                        st['folder'] = new
+                    parts = st['path'].replace('\\', '/').split('/')
+                    if parts and parts[0] == old:
+                        parts[0] = new
+                        st['path'] = os.path.join(*parts)
+            elif t == 'move':
+                st = state.get(rec.get('id'))
+                if st:
+                    st['path'] = rec.get('path') or st['path']
+                    st['folder'] = rec.get('folder') or st['folder']
+                    st['gone'] = False
+            elif t == 'gone':
+                st = state.get(rec.get('id'))
+                if st:
+                    st['gone'] = True
+        return state
+
     def file_records(self):
-        """全部文件记录(已套用文件夹改名),供《文件名对照表》使用。"""
-        recs = list(self._read_ledger())
-        renames = {r.get('from'): r.get('to') for r in recs if r.get('type') == 'rename'}
-        out = []
-        for r in recs:
-            if r.get('type') != 'file':
-                continue
-            path = r.get('path') or ''
-            parts = path.replace('\\', '/').split('/')
-            if parts and parts[0] in renames:
-                parts[0] = renames[parts[0]]
-                path = os.path.join(*parts)
-            out.append({'time': r.get('time', ''), 'unit': r.get('unit', ''),
-                        'name': r.get('name', ''), 'path': path,
-                        'category': r.get('category', '')})
-        return out
+        """全部文件的当前状态,供《文件名对照表》使用。"""
+        return [{'time': st['time'], 'unit': st['unit'], 'name': st['name'],
+                 'path': st['path'], 'category': st['category'], 'gone': st['gone']}
+                for st in self.current_files().values()]
 
     def cumulative_matrix(self):
-        """按归档记录累计:({(人员, 单位): 文件数}, {(人员, 单位): 疑似空值数})。"""
+        """按归档记录累计:({(人员, 单位): 文件数}, {(人员, 单位): 疑似空值数})。
+        文件被你挪到别人文件夹的,计在新的人名下;删掉的仍计入(单位确实反馈过)。"""
         matrix, empty = {}, {}
-        renames = {}
-        recs = list(self._read_ledger())
-        for rec in recs:
-            if rec.get('type') == 'rename':
-                renames[rec.get('from')] = rec.get('to')
-
-        def final(f):
-            seen = set()
-            while f in renames and f not in seen:
-                seen.add(f)
-                f = renames[f]
-            return f
-
-        for rec in recs:
-            if rec.get('type') != 'file':
-                continue
-            key = (final(rec.get('folder')), rec.get('unit') or '')
+        for st in self.current_files().values():
+            key = (st['folder'], st['unit'])
             matrix[key] = matrix.get(key, 0) + 1
-            if rec.get('empty'):
+            if st['empty']:
                 empty[key] = empty.get(key, 0) + 1
         return matrix, empty
+
+    # ---------- 同步:把你手动做的调整写进记录 ----------
+
+    def sync(self, cancel=None):
+        """对照磁盘上的实际情况更新归档记录。返回统计 dict。
+
+        - 记录里的文件不在原位置了:在未登记的文件里找回来
+          (先按内容完全相同,再按"文件名包含原文件名"——你加了备注又改了内容也能认出)
+          → 记一条 move;找不到 → 记一条 gone(视为你已删除)
+        - 未登记的其余文件(你手动放进来的)只统计,不改动。"""
+        stats = {'moved': 0, 'gone': 0, 'unregistered': 0, 'checked': 0}
+        state = self.current_files()
+        if not state:
+            return stats
+        active = {rid: st for rid, st in state.items() if not st['gone']}
+        registered = {os.path.normcase(os.path.normpath(st['path']))
+                      for st in active.values()}
+        missing = []
+        for rid, st in active.items():
+            stats['checked'] += 1
+            if not os.path.isfile(long_path(os.path.join(self.out_dir, st['path']))):
+                missing.append((rid, st))
+        unreg = []
+        for root, dirs, files in os.walk(long_path(self.out_dir)):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            rel_root = os.path.relpath(root, long_path(self.out_dir))
+            for f in files:
+                rel = os.path.normpath(os.path.join(rel_root, f))
+                if rel_root == '.' and (f == LEDGER_NAME or f.startswith(_TOOL_FILES)):
+                    continue
+                if os.path.normcase(rel) not in registered:
+                    unreg.append(rel)
+        if missing:
+            self._match_missing(missing, unreg, stats, cancel)
+        stats['unregistered'] = len(unreg)
+        if stats['moved'] or stats['gone']:
+            self.log(f'[同步记录] 你挪动/改名的 {stats["moved"]} 个文件已更新到新位置,'
+                     f'{stats["gone"]} 个已不在归档库里(视为你已删除)。')
+        return stats
+
+    def _match_missing(self, missing, unreg, stats, cancel):
+        hashes = {}
+
+        def digest(rel):
+            if rel not in hashes:
+                try:
+                    hashes[rel] = sha1_of(os.path.join(self.out_dir, rel))
+                except OSError:
+                    hashes[rel] = None
+            return hashes[rel]
+
+        for rid, st in missing:
+            if cancel is not None and cancel.is_set():
+                return
+            hit = next((u for u in unreg if digest(u) == st['sha1']), None)
+            if hit is None:
+                old = os.path.basename(st['path'])
+                stem, ext = os.path.splitext(old)
+                cands = [u for u in unreg
+                         if os.path.splitext(u)[1].lower() == ext.lower()
+                         and stem and stem in os.path.splitext(os.path.basename(u))[0]]
+                same_person = [u for u in cands if _top(u) == st['folder']]
+                pick = same_person or cands
+                hit = pick[0] if len(pick) == 1 else None
+            if hit is not None:
+                unreg.remove(hit)
+                self._append({'type': 'move', 'id': rid, 'path': hit, 'folder': _top(hit)})
+                stats['moved'] += 1
+            else:
+                self._append({'type': 'gone', 'id': rid})
+                stats['gone'] += 1

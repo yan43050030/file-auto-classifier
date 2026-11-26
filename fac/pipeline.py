@@ -469,6 +469,8 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         if lib.has_existing:
             tee(f'输出目录里已有 {len(lib.existing)} 个人员/企业文件夹:'
                 f'本次结果将合并进去(同一人/企业并入原文件夹,已导入过的相同文件自动跳过)。')
+            # 先把你在结果目录里手动做的调整(挪动/改名/删除)同步进归档记录
+            summary['sync'] = lib.sync(cancel_event)
         for item in plan:
             if item.action != 'place':
                 continue
@@ -543,7 +545,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         cum, cum_empty = lib.cumulative_matrix()
         reports = write_matrix_report(opts.out_dir, cum or matrix, tee,
                                       empty=cum_empty if cum else empty_matrix)
-        if opts.short_names:
+        if opts.short_names or summary.get('sync', {}).get('moved'):
             nm = write_name_map(opts.out_dir, lib.file_records(), tee)
             if nm:
                 reports.append(nm)

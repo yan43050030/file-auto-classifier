@@ -20,7 +20,7 @@ DEFAULTS = {
     'out_fixed': False,          # 输出目录固定为归档库
     'short_names': True,         # 精简文件名(【单位】信息_姓名_证号)
     'layout_v46': True,          # 已完成 V4.6 布局迁移的标记
-    'preview': False,
+    'preview': True,             # 试运行预览(先看清单再执行),默认开更稳妥
     'content_match': False,
     'split_excel': False,
     'dedup': False,

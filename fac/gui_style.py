@@ -11,26 +11,27 @@ BORDER = '#E2E8F0'
 TEXT = '#1E293B'
 TEXT_SEC = '#64748B'
 SUCCESS = '#10B981'
-RADIUS = '8px'
+RADIUS = '10px'
 
 QSS = f"""
 QMainWindow {{ background: {BG}; }}
 QGroupBox {{
     background: {CARD_BG}; border: 1px solid {BORDER}; border-radius: {RADIUS};
     margin-top: 14px; padding: 12px; padding-top: 18px;
-    font-size: 13px; font-weight: 600; color: {TEXT};
+    font-size: 15px; font-weight: 600; color: {TEXT};
 }}
 QGroupBox::title {{
     subcontrol-origin: margin; left: 12px; padding: 0 4px;
     color: {TEXT};
 }}
 QPushButton {{
-    border: 1px solid {BORDER}; border-radius: 6px; padding: 6px 16px;
-    background: {CARD_BG}; color: {TEXT}; font-size: 12px;
+    border: 1px solid {BORDER}; border-radius: 7px; padding: 6px 18px;
+    min-height: 22px;
+    background: {CARD_BG}; color: {TEXT}; font-size: 13px;
 }}
 QPushButton:hover {{ border-color: {PRIMARY}; color: {PRIMARY}; }}
 QPushButton#btnRun {{
-    background: {PRIMARY}; color: white; border: none; font-size: 14px;
+    background: {PRIMARY}; color: white; border: none; font-size: 16px;
     font-weight: 600; padding: 10px 32px;
 }}
 QPushButton#btnRun:hover {{ background: {PRIMARY_HOVER}; }}
@@ -39,7 +40,7 @@ QPushButton#btnRun[mode="organize"]:hover {{ background: #C2410C; }}
 QPushButton#btnRun:disabled, QPushButton#btnRun[mode="organize"]:disabled {{ background: #94A3B8; }}
 QToolTip {{
     background: #FFFFFF; color: {TEXT}; border: 1px solid {BORDER};
-    padding: 6px 8px; font-size: 12px;
+    padding: 6px 8px; font-size: 13px;
 }}
 QPushButton#btnCancel {{
     background: {DANGER}; color: white; border: none; font-size: 13px;
@@ -49,22 +50,23 @@ QPushButton#btnCancel:hover {{ background: #DC2626; }}
 QPushButton#btnCancel:disabled {{ background: #FCA5A5; }}
 QLineEdit, QPlainTextEdit, QTextEdit {{
     border: 1px solid {BORDER}; border-radius: 6px; padding: 6px;
-    background: white; color: {TEXT}; font-size: 12px;
+    background: white; color: {TEXT}; font-size: 13px;
 }}
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {{
     border-color: {PRIMARY};
 }}
 QListWidget {{
     border: 1px dashed {BORDER}; border-radius: 6px; background: #F8FAFC;
-    font-size: 12px; padding: 4px;
+    font-size: 13px; padding: 4px;
 }}
 QListWidget::item {{ padding: 4px 8px; }}
 QListWidget::item:selected {{ background: {PRIMARY}; color: white; border-radius: 4px; }}
 QComboBox {{
     border: 1px solid {BORDER}; border-radius: 6px; padding: 4px 8px;
-    background: white; font-size: 12px;
+    background: white; font-size: 13px;
 }}
-QCheckBox, QRadioButton {{ font-size: 12px; color: {TEXT}; spacing: 6px; }}
+QCheckBox, QRadioButton {{ font-size: 13px; color: {TEXT}; spacing: 8px; padding: 2px 0; }}
+QCheckBox::indicator, QRadioButton::indicator {{ width: 16px; height: 16px; }}
 QWidget {{ color: {TEXT}; }}
 QLabel {{ color: {TEXT}; background: transparent; }}
 QComboBox {{ color: {TEXT}; padding-right: 24px; }}
@@ -77,9 +79,18 @@ QComboBox QAbstractItemView {{
     background: white; color: {TEXT}; selection-background-color: {PRIMARY};
     selection-color: white; border: 1px solid {BORDER};
 }}
+QSpinBox::up-button, QSpinBox::down-button {{
+    subcontrol-origin: border; width: 22px; border: none; background: transparent;
+}}
+QSpinBox::up-button {{ subcontrol-position: top right; }}
+QSpinBox::down-button {{ subcontrol-position: bottom right; }}
+QSpinBox::up-arrow {{ image: url(__ARROW_UP__); width: 10px; height: 6px; }}
+QSpinBox::down-arrow {{ image: url(__ARROW__); width: 10px; height: 6px; }}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background: #EFF6FF; }}
 QSpinBox {{
     border: 1px solid {BORDER}; border-radius: 6px; padding: 3px 6px;
-    background: white; color: {TEXT}; font-size: 12px;
+    padding-right: 24px; min-height: 26px;
+    background: white; color: {TEXT}; font-size: 13px;
 }}
 QMenu {{ background: white; color: {TEXT}; border: 1px solid {BORDER}; }}
 QMenu::item:selected {{ background: {PRIMARY}; color: white; }}
@@ -87,21 +98,21 @@ QDialog, QMessageBox, QInputDialog {{ background: {CARD_BG}; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QTabWidget::pane {{ border: 1px solid {BORDER}; border-radius: 6px; background: white; }}
 QTabBar::tab {{
-    padding: 8px 20px; border: 1px solid transparent; font-size: 12px;
+    padding: 9px 22px; border: 1px solid transparent; font-size: 14px;
     color: {TEXT_SEC};
 }}
 QTabBar::tab:selected {{ color: {PRIMARY}; border-bottom: 2px solid {PRIMARY}; font-weight: 600; }}
 QTabBar::tab:hover {{ color: {PRIMARY}; }}
 QProgressBar {{
     border: none; border-radius: 4px; background: {BORDER}; height: 6px;
-    text-align: center; font-size: 10px;
+    text-align: center; font-size: 11px;
 }}
 QProgressBar::chunk {{ background: {PRIMARY}; border-radius: 4px; }}
 QSplitter::handle {{ background: {BORDER}; width: 1px; }}
 QScrollArea {{ border: none; background: transparent; }}
 QTreeWidget {{
     border: 1px solid {BORDER}; border-radius: 6px;
-    font-size: 12px; alternate-background-color: #F8FAFC;
+    font-size: 13px; alternate-background-color: #F8FAFC;
 }}
 QTreeWidget::item:selected {{ background: {PRIMARY}; color: white; }}
 QTreeWidget::item {{ min-height: 26px; padding: 0 2px; }}
@@ -112,7 +123,7 @@ QTreeView QLineEdit, QTableView QLineEdit, QListView QLineEdit {{
 }}
 QHeaderView::section {{
     background: #F1F5F9; border: none; border-bottom: 1px solid {BORDER};
-    padding: 6px 10px; font-size: 12px; font-weight: 600;
+    padding: 6px 10px; font-size: 13px; font-weight: 600;
 }}
 QScrollBar:vertical {{
     background: transparent; width: 8px; margin: 0;
@@ -164,18 +175,19 @@ def apply_theme(app):
     for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
         pal.setColor(QPalette.Disabled, role, QColor('#94A3B8'))
     app.setPalette(pal)
-    app.setStyleSheet(QSS.replace('__ARROW__', _arrow_file()))
+    app.setStyleSheet(QSS.replace('__ARROW__', _arrow_file('down'))
+                      .replace('__ARROW_UP__', _arrow_file('up')))
     app.setFont(QFont('Microsoft YaHei UI', 10))
 
 
-def _arrow_file():
-    """下拉箭头图标:运行时画成 PNG 写到临时目录供样式表引用。
+def _arrow_file(direction='down'):
+    """下拉/数字框箭头:运行时画成 PNG 写到临时目录供样式表引用。
     (PNG 是 Qt 内置格式,打包成单文件 exe 也不依赖额外插件)"""
     import os
     import tempfile
     from PySide6.QtGui import QPixmap, QPainter, QPen, QColor
     from PySide6.QtCore import Qt, QPointF
-    path = os.path.join(tempfile.gettempdir(), 'fac_combo_arrow.png')
+    path = os.path.join(tempfile.gettempdir(), f'fac_arrow_{direction}.png')
     try:
         pm = QPixmap(20, 12)              # 2 倍尺寸,高分屏也清晰
         pm.fill(Qt.transparent)
@@ -185,7 +197,9 @@ def _arrow_file():
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
         p.setPen(pen)
-        p.drawPolyline([QPointF(2, 2), QPointF(10, 10), QPointF(18, 2)])
+        pts = [QPointF(2, 2), QPointF(10, 10), QPointF(18, 2)] if direction == 'down' \
+            else [QPointF(2, 10), QPointF(10, 2), QPointF(18, 10)]
+        p.drawPolyline(pts)
         p.end()
         if not pm.save(path, 'PNG'):
             return ''
