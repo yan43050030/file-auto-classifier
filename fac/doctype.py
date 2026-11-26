@@ -63,6 +63,36 @@ def _head_text_table(path):
     return ' '.join(parts)
 
 
+# 银行/支付机构(含常见简称):疑似空值只针对这类反馈
+_BANK_RE = re.compile(
+    r'银行|信用社|信用合作|农商|农信|村镇银行|邮储|储蓄|'
+    # 简称只收不会撞车的(平安/民生/中信等在公安、政务文件里也常见,不收)
+    r'[工建农交招]行|中国银行|浦发|邮储|'
+    r'支付宝|财付通|微信支付|网商|银联|快钱|拉卡拉|易宝|京东支付|云闪付|支付机构|'
+    r'流水|对账单|交易明细|账户|帐户|开户|存款|银行卡')
+# 表头里的账户类列(查无账户时银行常回一张只有这些表头的表)
+_ACCOUNT_COLS = ('账号', '帐号', '卡号', '开户行', '开户网点', '开户机构', '账户',
+                 '帐户', '开户日期', '销户日期', '账户状态')
+
+
+def is_bank_related(path, fname=None, unit=''):
+    """是否银行/支付类反馈:来源单位或文件名提到银行/支付机构/账户,
+    或判定为银行流水,或表头有账号/卡号/开户行等账户列。"""
+    fname = fname or os.path.basename(path)
+    if _BANK_RE.search(unit or '') or _BANK_RE.search(fname):
+        return True
+    if detect_category(path, fname) == CAT_FLOW:
+        return True
+    low = path.lower()
+    try:
+        if low.endswith(('.xlsx', '.xlsm', '.xls', '.csv')):
+            head = _head_text_table(path)
+            return sum(1 for c in _ACCOUNT_COLS if c in head) >= 1
+    except Exception:
+        pass
+    return False
+
+
 def detect_category(path, fname=None):
     """返回 '银行流水' 或 '其他数据'。读内容失败时只按文件名判断。"""
     fname = fname or os.path.basename(path)

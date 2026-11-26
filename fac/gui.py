@@ -387,11 +387,13 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.spin_emptykb.setSuffix(' KB')
         self.spin_emptykb.setFixedWidth(84)
         er.addWidget(self.spin_emptykb)
-        lbl = QLabel('且无实质内容的反馈(只有表头、"查无记录"等),'
-                     '放入此人目录下的「疑似空值」子文件夹')
+        lbl = QLabel('且无实质内容的银行类反馈(只有表头、"查无账户"等),'
+                     '放入此人目录下的「疑似空值」;机动车/出入境等其他信息不受影响')
         lbl.setWordWrap(True)
         er.addWidget(lbl, 1)
-        cb.setToolTip('有实质数据行的小表格(如只有一两条账户记录)仍放在正常目录,不会被藏起来。\n'
+        cb.setToolTip('只针对银行/支付类反馈(来源单位或文件名含银行、工行/建行…、支付宝等,'
+                      '或表格有账号/卡号/开户行列)。\n'
+                      '有实质数据行的小表格(如只有一两条账户记录)仍放在正常目录,不会被藏起来。\n'
                       '反馈核对表里,全部为疑似空值的格子显示「疑似空」(灰色)。')
         al.addLayout(er)
         al.addWidget(self._sep())

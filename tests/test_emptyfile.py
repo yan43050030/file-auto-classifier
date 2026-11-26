@@ -115,3 +115,42 @@ def test_pipeline_empty_detect_off(tmp_path):
             log=lambda m: None, progress=lambda *a: None,
             ask_password=lambda n, a: None)
     assert (out / '张三' / '甲银行' / '张三_账户查询.xlsx').exists()
+
+
+def test_empty_only_for_bank_feedback(tmp_path):
+    """机动车、出入境等信息本来就小,不能被当成疑似空值;银行的查无账户才是。"""
+    from fac.emptyfile import BUCKET_EMPTY
+    src = tmp_path / 'in'; src.mkdir()
+    car = xlsx(tmp_path / 'car.xlsx', [['号牌号码', '车辆类型', '所有人', '状态'],
+                                       ['京A12345', '小型轿车', '张三', '正常']])
+    car_none = xlsx(tmp_path / 'car0.xlsx', [['号牌号码', '车辆类型', '所有人', '状态']])
+    acct_none = xlsx(tmp_path / 'acct.xlsx', [['姓名', '证件号码', '开户行', '账号', '余额']])
+    with zipfile.ZipFile(src / '车管所.zip', 'w') as z:
+        z.write(car, '张三_机动车登记信息.xlsx')
+        z.write(car_none, '张三_驾驶证信息.xlsx')          # 只有表头,但不是银行
+    with zipfile.ZipFile(src / '出入境.zip', 'w') as z:
+        z.writestr('张三_出入境记录.txt', '无出入境记录')    # 有"无"字样,但不是银行
+    with zipfile.ZipFile(src / '协查反馈.zip', 'w') as z:
+        z.write(acct_none, '张三_查询结果.xlsx')            # 单位名看不出,但表头是账户列
+    with zipfile.ZipFile(src / '建行.zip', 'w') as z:       # 简称
+        z.writestr('张三_回函.txt', '经查,该人在我行无开户记录。')
+    out = tmp_path / 'out'
+    run_job(JobOptions([str(src)], str(out), Roster.from_text('张三'),
+                       intelligent=False, empty_detect=True, unit_mode='category'),
+            log=lambda m: None, progress=lambda *a: None,
+            ask_password=lambda n, a: None)
+    empties = sorted(os.listdir(out / '张三' / BUCKET_EMPTY))
+    assert empties == ['【协查反馈】张三_查询结果.xlsx', '【建行】张三_回函.txt']
+    others = sorted(os.listdir(out / '张三' / '其他数据'))
+    assert others == ['【出入境】张三_出入境记录.txt', '【车管所】张三_机动车登记信息.xlsx',
+                      '【车管所】张三_驾驶证信息.xlsx']
+
+
+def test_is_bank_related(tmp_path):
+    from fac.doctype import is_bank_related
+    t = tmp_path / 'a.txt'; t.write_text('x', encoding='utf-8')
+    assert is_bank_related(str(t), '张三_回执.txt', '中国工商银行北京分行')
+    assert is_bank_related(str(t), '张三_回执.txt', '农行反馈')
+    assert is_bank_related(str(t), '张三_支付宝账户.txt', '某单位')
+    assert not is_bank_related(str(t), '张三_回执.txt', '公安局平安建设办公室')
+    assert not is_bank_related(str(t), '张三_出入境.txt', '出入境管理局')

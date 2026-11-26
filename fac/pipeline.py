@@ -19,7 +19,7 @@ from .rules import Rule, match_rules
 from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
 from .company import build_company_map, CompanyMatcher
 from .emptyfile import empty_reason, BUCKET_EMPTY, DEFAULT_MAX_KB
-from .doctype import detect_category
+from .doctype import detect_category, is_bank_related
 from .library import Library, SPECIAL_FOLDERS
 from . import extract as ex
 from .report import write_matrix_report
@@ -554,7 +554,9 @@ def run_job(opts: JobOptions, log, progress, ask_password,
 
 
 def _mark_empty(plan, opts: JobOptions, tee):
-    """给归到人员/企业名下的小文件做"疑似空值"判定(未分类的不动)。"""
+    """给归到人员/企业名下的小文件做"疑似空值"判定(未分类的不动)。
+
+    只针对银行/支付类反馈:机动车、出入境、户籍等信息本来就小,不能当空值。"""
     max_bytes = opts.empty_max_kb * 1024
     n = 0
     for item in plan:
@@ -565,6 +567,8 @@ def _mark_empty(plan, opts: JobOptions, tee):
         except OSError:
             continue
         if size > max_bytes:
+            continue
+        if not is_bank_related(item.src, item.fname, item.unit):
             continue
         # 被查询对象的姓名/证号:表格里只出现这些不算"有内容"
         kws = []
@@ -577,7 +581,7 @@ def _mark_empty(plan, opts: JobOptions, tee):
             item.empty = reason
             n += 1
     if n:
-        tee(f'[疑似空值] {n} 个小文件(≤{opts.empty_max_kb} KB)看起来没有实质内容,'
+        tee(f'[疑似空值] {n} 个银行类小文件(≤{opts.empty_max_kb} KB)看起来没有实质内容,'
             f'将放入此人目录下的「{BUCKET_EMPTY}」子文件夹。')
 
 
