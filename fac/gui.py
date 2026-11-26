@@ -1077,6 +1077,9 @@ class MainWindow(OrganizeMixin, QMainWindow):
             self._on_organize_done(summary)
             return
         msg = f'分类完成!共处理 {summary.get("files", 0)} 个文件。'
+        if summary.get('reimport_skipped'):
+            msg += (f'\n其中新放入 {summary["files"] - summary["reimport_skipped"]} 个;'
+                    f'{summary["reimport_skipped"]} 个之前已导入过,已跳过(原有文件和你的标记都不动)。')
         if summary.get('skipped_pw'):
             msg += f'\n{summary["skipped_pw"]} 个加密包未解压,见「暂未解压」。'
         if summary.get('failed'):

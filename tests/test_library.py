@@ -219,3 +219,49 @@ def test_invoice_with_bank_account_column_is_not_bank(tmp_path):
     assert not is_bank_related(inv, '张三_增值税专用发票信息.xlsx', '')
     assert not is_bank_related(inv, '张三.xlsx', '国家税务总局某某市税务局')
     assert is_pboc('张三_征信中心征信.pdf', '')
+
+
+def test_user_scenario_batches_marks_and_full_reimport(tmp_path):
+    """5 人分 3 批反馈 + 用户在结果上做标记 + 忘了导过哪些、全部重新导入。"""
+    import shutil
+    people = ['张三', '李四', '王五', '赵六', '钱七']
+    ids = {}
+    for i, n in enumerate(people, 1):
+        b = f'11010119900301{i}12'
+        ids[n] = b + check_digit(b)
+    roster = '\n'.join(f'{n},{ids[n]}' for n in people)
+    out = tmp_path / 'out'
+    flow = lambda n, amt: xlsx(tmp_path / f'{n}{amt}.xlsx',
+                               [FLOW_HEAD] + [['2024-01-02', amt + k, '贷', 9, '某', 'x'] for k in range(5)])
+    b1 = {'第1批_工商银行.zip': {f'{n}_流水.xlsx': flow(n, 100) for n in people},
+          '第1批_公安户籍.zip': {f'{n}_人口和户籍信息.txt': f'{n} 户籍地址某街道' * 3 for n in people}}
+    run(b1, out, roster)
+    P = lambda n: out / f'{n}_{ids[n]}'
+    # 标记:文件名前/后加备注、改文件内容、挪到自建文件夹、给人员文件夹改名
+    f = next((P('张三') / '银行流水').iterdir()); f.rename(f.with_name('有100万元待查_' + f.name))
+    f = next((P('李四') / '银行流水').iterdir())
+    g = f.with_name(f.stem + '_已核' + f.suffix); f.rename(g)
+    wb = openpyxl.load_workbook(g); wb.active['G1'] = '备注:3月5日50万需调单'; wb.save(g)
+    (P('王五') / '重点').mkdir(); f = next((P('王五') / '银行流水').iterdir())
+    shutil.move(str(f), str(P('王五') / '重点' / f.name))
+    P('赵六').rename(out / f'赵六_{ids["赵六"]}_重点人员')
+    snapshot = {p: p.stat().st_mtime for p in out.rglob('*') if p.is_file()
+                and p.suffix in ('.xlsx', '.txt') and '核对表' not in p.name and '日志' not in p.name}
+    # 第二、三批
+    _l, r2 = run({'第2批_建设银行.zip': {f'{n}_交易明细.xlsx': flow(n, 500) for n in people[:3]},
+                  '第3批_铁路.zip': {f'{n}_铁路总公司票面信息.txt': f'{n} G1次' * 3 for n in people[3:]}},
+                 out, roster)
+    assert r2['reimport_skipped'] == 0
+    # 全部重新导入,外加一个重复下载的「(1)」压缩包
+    _l, r3 = run({**b1,
+                  '第1批_工商银行 (1).zip': b1['第1批_工商银行.zip'],
+                  '第2批_建设银行.zip': {f'{n}_交易明细.xlsx': flow(n, 500) for n in people[:3]}},
+                 out, roster)
+    assert r3['reimport_skipped'] == r3['files'] == 18      # 全部识别为已导入
+    folders = sorted(p.name for p in out.iterdir() if p.is_dir())
+    assert len(folders) == 5 and f'赵六_{ids["赵六"]}_重点人员' in folders   # 没有分家
+    assert sorted(p.name for p in (out / f'赵六_{ids["赵六"]}_重点人员').rglob('*.txt')) == \
+        ['【第1批_公安户籍】赵六_人口和户籍信息.txt', '【第3批_铁路】赵六_铁路总公司票面信息.txt']
+    for p, t in snapshot.items():                            # 标记过的文件一个没动
+        assert p.exists() and p.stat().st_mtime == t, p
+    assert len(list(out.rglob('*.xlsx'))) == 5 + 3 + 1       # 流水 8 个 + 核对表 1 个

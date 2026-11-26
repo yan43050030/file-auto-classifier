@@ -502,7 +502,12 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 tee(f'  [错误] 归档失败 {item.fname}: {e}')
 
         # ---- 6. 汇总 + 反馈核对表 ----
-        tee(f'\n分类完成!共处理 {summary["files"]} 个文件。')
+        new = summary['files'] - summary['reimport_skipped']
+        if summary['reimport_skipped']:
+            tee(f'\n分类完成!共处理 {summary["files"]} 个文件:新放入 {new} 个,'
+                f'已导入过跳过 {summary["reimport_skipped"]} 个。')
+        else:
+            tee(f'\n分类完成!共处理 {summary["files"]} 个文件。')
         if summary.get('skipped_pw'):
             tee(f'有 {summary["skipped_pw"]} 个加密压缩包因未提供密码,'
                 f'已放入「暂未解压」文件夹(可稍后单独处理)。')

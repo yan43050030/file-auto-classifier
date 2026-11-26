@@ -9,6 +9,7 @@
 """
 
 import os
+import re
 import json
 import datetime
 
@@ -26,14 +27,29 @@ def _is_code(s):
     return bool(s) and (valid_id18(s) or valid_id15(s) or valid_uscc(s))
 
 
+# 同一个压缩包下载了两次:「工商银行 (1)」「工商银行 - 副本」视为同一来源
+_COPY_TAIL = re.compile(r'(\s*(\(\d+\)|（\d+）|[-_ ]*副本(\s*\(\d+\))?|[-_ ]*copy(\s*\d+)?))+$',
+                        re.IGNORECASE)
+
+
+def unit_key(unit):
+    return _COPY_TAIL.sub('', (unit or '').strip()) or (unit or '')
+
+
+_SPLIT_RE = re.compile(r'[_\s\-—()（）【】\[\]·.,，、]+')
+
+
 def parse_folder(name):
-    """「张三_110…」→ ('张三', '110…');「110…」→ ('', '110…');「张三」→ ('张三', '')。"""
+    """「张三_110…」→ ('张三', '110…');「110…」→ ('', '110…');「张三」→ ('张三', '')。
+
+    用户给文件夹加了备注也认得出:「赵六_110…_重点人员」「重点_赵六_110…」
+    → 证号在名称中任意位置都行,名称取证号前面的部分。"""
     if _is_code(name):
         return '', name.upper()
-    if '_' in name:
-        head, tail = name.rsplit('_', 1)
-        if _is_code(tail):
-            return head, tail.upper()
+    for tok in _SPLIT_RE.split(name):
+        if tok and _is_code(tok):
+            before = [t for t in _SPLIT_RE.split(name[:name.find(tok)]) if t]
+            return (before[-1] if before else ''), tok.upper()
     return name, ''
 
 
@@ -58,11 +74,25 @@ class Library:
             self._index(n)
             self.existing.add(n)
         self.ledger_path = os.path.join(out_dir, LEDGER_NAME)
-        self._imported = set()       # (folder, unit, 原文件名, sha1)
-        for rec in self._read_ledger():
+        # 已导入文件:(对象键, 单位键, 原文件名, sha1)。对象键优先用证号/信用代码,
+        # 这样用户给人员文件夹改了名(加备注)也认得出是同一人的旧文件
+        self._imported = set()
+        recs = list(self._read_ledger())
+        renames = {r.get('from'): r.get('to') for r in recs if r.get('type') == 'rename'}
+        for rec in recs:
             if rec.get('type') == 'file':
-                self._imported.add((rec.get('folder'), rec.get('unit'),
+                f = rec.get('folder')
+                seen = set()
+                while f in renames and f not in seen:
+                    seen.add(f)
+                    f = renames[f]
+                self._imported.add((self._who(f), unit_key(rec.get('unit')),
                                     rec.get('name'), rec.get('sha1')))
+
+    @staticmethod
+    def _who(folder):
+        name, code = parse_folder(folder or '')
+        return code or folder
 
     @property
     def has_existing(self):
@@ -96,8 +126,9 @@ class Library:
         name, code = parse_folder(target)
         if code and code in self.by_code:
             old = self.by_code[code]                   # 证号/信用代码相同 = 同一人/企业
-            if name and not parse_folder(old)[0] and old not in self.renames:
-                # 旧文件夹只有证号、这次知道了名称:升级为「名称_证号」
+            if name and old.upper() == code and old not in self.renames:
+                # 旧文件夹就是光秃秃的证号、这次知道了名称:升级为「名称_证号」
+                # (用户自己加过备注的文件夹名一律不动)
                 self.renames[old] = target
                 self._unindex(old)
                 self.existing.discard(old)
@@ -107,7 +138,7 @@ class Library:
             return old
         cands = self.by_name.get(name, []) if name else []
         if code:
-            plain = [f for f in cands if not parse_folder(f)[1]]
+            plain = [f for f in cands if not parse_folder(f)[1] and f == name]
             if len(plain) == 1 and len(cands) == 1:
                 old = plain[0]                         # 旧的只有名称:升级改名
                 self.renames[old] = target
@@ -144,7 +175,7 @@ class Library:
             digest = sha1_of(src)
         except OSError:
             return False, ''
-        if (folder, unit, name, digest) in self._imported:
+        if (self._who(folder), unit_key(unit), name, digest) in self._imported:
             return True, digest
         if dst_candidate and os.path.isfile(long_path(dst_candidate)):
             try:
@@ -180,7 +211,7 @@ class Library:
             pass
 
     def record(self, folder, unit, name, digest, category, empty, rel_path):
-        self._imported.add((folder, unit, name, digest))
+        self._imported.add((self._who(folder), unit_key(unit), name, digest))
         self._append({'type': 'file', 'folder': folder, 'unit': unit,
                       'name': name, 'sha1': digest, 'category': category,
                       'empty': bool(empty), 'path': rel_path})
