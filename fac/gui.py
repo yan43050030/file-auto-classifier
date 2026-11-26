@@ -12,7 +12,7 @@ import datetime
 import gc
 import threading
 
-from PySide6.QtCore import Qt, Signal, QThread, QSize
+from PySide6.QtCore import Qt, Signal, QThread, QSize, QEvent
 from PySide6.QtGui import QFont, QIcon, QAction
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -34,7 +34,7 @@ from .rules import Rule
 from . import config as conf
 from . import extract as ex
 
-from .gui_style import QSS, TEXT_SEC, CARD_BG, BORDER, apply_theme  # noqa: F401
+from .gui_style import QSS, TEXT_SEC, CARD_BG, BORDER, PRIMARY, apply_theme  # noqa: F401
 from .gui_organize import OrganizeMixin
 from .gui_tips import apply_tooltips, TIPS
 from .gui_bridge import UiBridge, in_main_thread
@@ -192,7 +192,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         splitter.addWidget(bottom_w)
 
         # 初始比例:上 1.5 : 中 4 : 下 1.5
-        splitter.setSizes([170, 420, 150])
+        splitter.setSizes([260, 400, 140])
         # 窗口变大/变小时,多出或缺少的高度主要给「分类设置」
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -234,7 +234,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         gb.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         lay = QVBoxLayout(gb); lay.setSpacing(8)
         self.lst_inputs = _DropList(self._add_input)
-        self.lst_inputs.setMinimumHeight(90)
+        self.lst_inputs.setMinimumHeight(150)
         self.lst_inputs.setAlternatingRowColors(True)
         self.lst_inputs.setSelectionMode(QListWidget.ExtendedSelection)
         self.lst_inputs.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -252,7 +252,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         br.addWidget(b)
         br.addStretch()
         lay.addLayout(br)
-        lbl = QLabel('💡 支持拖拽文件/文件夹到上方列表')
+        lbl = QLabel('💡 可把压缩包/文件夹直接拖到本窗口任意位置')
         lbl.setStyleSheet(f'color:{TEXT_SEC};font-size:12px;')
         lay.addWidget(lbl)
         self._setup_drop()
@@ -295,6 +295,15 @@ class MainWindow(OrganizeMixin, QMainWindow):
         sr.addWidget(self.btn_sync)
         sr.addStretch()
         lay.addLayout(sr)
+        # 密码本:放在这里一眼可见(加密压缩包会先用其中的密码自动尝试)
+        pwf = QHBoxLayout(); pwf.setSpacing(6)
+        pwf.addWidget(QLabel('🔑 密码本:'))
+        self.txt_pwfile = QLineEdit()
+        self.txt_pwfile.setPlaceholderText('可选:含解压密码的 txt(每行一个,或「文件名: 密码」)')
+        pwf.addWidget(self.txt_pwfile, 1)
+        b = QPushButton('选择密码本'); b.setFixedHeight(34); b.clicked.connect(self._choose_pw)
+        pwf.addWidget(b)
+        lay.addLayout(pwf)
         lay.addStretch()
         return gb
 
@@ -439,15 +448,6 @@ class MainWindow(OrganizeMixin, QMainWindow):
             b = QPushButton(txt); b.setFixedHeight(34); b.clicked.connect(slot)
             rb2.addWidget(b)
         rb2.addStretch(); al.addLayout(rb2)
-        al.addWidget(self._sep())
-
-        pwf = QHBoxLayout(); pwf.setSpacing(6)
-        pwf.addWidget(QLabel('额外密码本:'))
-        self.txt_pwfile = QLineEdit()
-        pwf.addWidget(self.txt_pwfile)
-        b = QPushButton('选择'); b.setFixedHeight(34); b.clicked.connect(self._choose_pw)
-        pwf.addWidget(b)
-        al.addLayout(pwf)
         tabs.addTab(self._scroll(ta), '🔧 高级功能')
 
         # ── 文件整理 tab ──
@@ -673,8 +673,39 @@ class MainWindow(OrganizeMixin, QMainWindow):
         menu.exec(self.lst_inputs.viewport().mapToGlobal(pos))
 
     def _setup_drop(self):
-        """拖拽:拖到输入列表或窗口任意位置都可以。"""
+        """拖拽:拖到本窗口任意位置都可以(日志区、名单框、设置页、输出框……)。
+
+        输入框、文本框等子控件默认会"吃掉"拖进来的文件(把路径当文字插入,
+        或直接拒绝),所以在应用层装一个事件过滤器,凡是拖进本窗口的本地文件
+        一律当作"添加输入"处理。"""
         self.setAcceptDrops(True)     # 列表本身见 _DropList
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def _set_drop_hint(self, on):
+        lst = self.lst_inputs
+        lst.setStyleSheet(
+            f'QListWidget{{border:2px dashed {PRIMARY};background:#EFF6FF;}}' if on else '')
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t in (QEvent.DragEnter, QEvent.DragMove, QEvent.Drop, QEvent.DragLeave) \
+                and isinstance(obj, QWidget) and obj.window() is self:
+            if t == QEvent.DragLeave:
+                self._set_drop_hint(False)
+                return False
+            md = ev.mimeData()
+            if md is not None and md.hasUrls() and \
+                    any(u.isLocalFile() for u in md.urls()):
+                if t == QEvent.Drop:
+                    self._set_drop_hint(False)
+                    _drop_urls(ev, self._add_input)
+                else:
+                    self._set_drop_hint(True)
+                    ev.acceptProposedAction()
+                return True
+        return super().eventFilter(obj, ev)
 
     def dragEnterEvent(self, e):
         _accept_urls(e)
@@ -1188,6 +1219,9 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self._bridge.post(run)
 
     def closeEvent(self, event):
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
         try:
             self._ui_timer.stop()
             self._gc_timer.stop()

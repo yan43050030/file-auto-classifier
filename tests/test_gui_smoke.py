@@ -395,3 +395,32 @@ def test_short_names_option(win):
     assert win._gather_cfg()['short_names'] is True
     opts = win._organize_opts(str(win.txt_out.text() or '.'))
     assert opts.library_mode == 'ask'                 # 文件整理遇到归档库会询问
+
+
+def test_drop_anywhere_in_window_adds_inputs(win, app, tmp_path):
+    """拖到窗口任意位置(日志区、名单框、输出框、设置页…)都能添加,不只是列表。"""
+    from PySide6.QtCore import QMimeData, QUrl, QPoint, QPointF, Qt
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+    win.show()
+    targets = [win.log, win.txt_roster, win.txt_out, win._tabs, win.lbl_banner,
+               win.txt_pwfile]
+    for i, w in enumerate(targets):
+        f = tmp_path / f'包{i}.zip'
+        f.write_bytes(b'PK')
+        md = QMimeData()
+        md.setUrls([QUrl.fromLocalFile(str(f))])
+        enter = QDragEnterEvent(QPoint(5, 5), Qt.CopyAction, md,
+                                Qt.LeftButton, Qt.NoModifier)
+        app.sendEvent(w, enter)
+        assert enter.isAccepted(), w
+        drop = QDropEvent(QPointF(5, 5), Qt.CopyAction, md,
+                          Qt.LeftButton, Qt.NoModifier)
+        app.sendEvent(w, drop)
+        assert os.path.normpath(str(f)) in win.inputs, w
+    assert win.txt_roster.toPlainText() == ''          # 没把路径当文字插进名单框
+    assert win.txt_out.text() != str(tmp_path / '包2.zip')
+
+
+def test_password_file_in_output_area(win):
+    # 密码本输入框在「② 保存到」区域,和同步按钮在一起
+    assert win.txt_pwfile.parentWidget() is win.btn_sync.parentWidget()
