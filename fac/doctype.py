@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 """人员/企业文件夹内的资料类型细分:银行流水 / 其他数据(疑似空值另由 emptyfile 判定)。
 
-判定依据:
-1. 文件名含"流水/交易明细/对账单…"           → 银行流水
-2. 表格(xlsx/xls/csv)前 20 行里的表头同时出现
-   日期类列 + 金额/借贷类列,且总计命中 ≥3 种流水列  → 银行流水
-3. PDF/Word 正文开头同样满足上面的列名组合        → 银行流水
-4. 其余                                         → 其他数据
+「银行流水」文件夹放 银行/支付机构 的全部反馈(交易流水、账户信息、开户资料…),
+包括人民银行账户信息;其余来源(人社、卫健、国土、社保、不动产、出生医学证明、保险、
+出入境、旅馆住宿、人口户籍、铁路票面/同行人等)放「其他数据」。
+
+判定顺序:
+1. 文件名提到银行/支付机构(工商银行、农行、人民银行、支付宝…)→ 银行
+2. 文件名提到上述非银行来源                                → 其他
+3. 文件名含"流水/交易明细/对账单…"                         → 银行
+4. 同样的规则再看来源单位(压缩包名)
+5. 都看不出时看内容:表头像流水(交易日期 + 金额/借贷 + 余额/对方户名…),
+   或有账号/卡号/开户行等账户列                               → 银行
 """
 
 import os
@@ -63,55 +68,78 @@ def _head_text_table(path):
     return ' '.join(parts)
 
 
-# 银行/支付机构(含常见简称):疑似空值只针对这类反馈
-_BANK_RE = re.compile(
-    r'银行|信用社|信用合作|农商|农信|村镇银行|邮储|储蓄|'
-    # 简称只收不会撞车的(平安/民生/中信等在公安、政务文件里也常见,不收)
-    r'[工建农交招]行|中国银行|浦发|邮储|'
-    r'支付宝|财付通|微信支付|网商|银联|快钱|拉卡拉|易宝|京东支付|云闪付|支付机构|'
-    r'流水|对账单|交易明细|账户|帐户|开户|存款|银行卡')
+# ---------- 银行类 / 非银行类 来源 ----------
+# 银行与支付机构(含不会撞车的简称;平安/民生/中信等在公安、政务文件里也常见,不收)
+_BANK_NAME = re.compile(
+    r'银行|人行|信用社|信用合作|农商行|农村商业|农信社|村镇银行|邮储|'
+    r'[工建农交招]行|浦发|支付宝|财付通|微信支付|网商|银联|云闪付|京东支付|'
+    r'快钱|拉卡拉|易宝|支付机构')
+# 人民银行(账户信息汇总):归入银行流水,但从不判为疑似空值
+_PBOC = re.compile(r'人民银行|人行|征信')
+# 常见非银行来源(调取清单):人社厅个人基本信息、卫健委全员人口、国土自然资源、
+# 社保、不动产、出生医学证明、保险、出入境记录/证件、旅馆住宿、人口和户籍、
+# 铁路票面/同行人 …… 这些数据本来就小,也常含"个人账户/银行账号"等字样,
+# 一律不算银行类
+_NON_BANK = re.compile(
+    r'人社|人力资源|社会保障|社保|社会保险|医保|医疗保险|养老|失业|工伤|'
+    r'卫健|卫生|健康委|全员人口|人口|户籍|户口|身份证|'
+    r'国土|自然资源|不动产|房产|房屋|土地|'
+    r'出生医学|出生证|保险|寿险|财险|'
+    r'出入境|护照|港澳|通行证|旅馆|住宿|酒店|'
+    r'铁路|火车|票面|同行人|航空|民航|'
+    r'车管|机动车|驾驶|车辆|公积金|税务|纳税|工商登记|市场监管|婚姻|殡葬|'
+    r'公安|派出所|看守所|监狱|法院|检察')
 # 表头里的账户类列(查无账户时银行常回一张只有这些表头的表)
-_ACCOUNT_COLS = ('账号', '帐号', '卡号', '开户行', '开户网点', '开户机构', '账户',
-                 '帐户', '开户日期', '销户日期', '账户状态')
+_ACCOUNT_COLS = ('账号', '帐号', '卡号', '开户行', '开户网点', '开户机构',
+                 '开户日期', '销户日期', '账户状态', '帐户状态')
+
+
+def _source_says(text):
+    """'bank' / 'other' / None:按文件名或来源单位名判断。"""
+    if not text:
+        return None
+    if _BANK_NAME.search(text):
+        return 'bank'
+    if _NON_BANK.search(text):
+        return 'other'
+    if _FLOW_NAME.search(text):
+        return 'bank'
+    return None
+
+
+def is_pboc(fname='', unit=''):
+    return bool(_PBOC.search(fname or '') or _PBOC.search(unit or ''))
 
 
 def is_bank_related(path, fname=None, unit=''):
-    """是否银行/支付类反馈:来源单位或文件名提到银行/支付机构/账户,
-    或判定为银行流水,或表头有账号/卡号/开户行等账户列。"""
+    """是否银行/支付类反馈。
+
+    先看文件名,再看来源单位(压缩包名):提到银行/支付机构 → 是;
+    提到人社/卫健/不动产/出入境/铁路等非银行来源 → 否;
+    都看不出时再看内容:表头像流水(交易日期+金额+余额…)或有账号/卡号/开户行列 → 是。"""
     fname = fname or os.path.basename(path)
-    if _BANK_RE.search(unit or '') or _BANK_RE.search(fname):
-        return True
-    if detect_category(path, fname) == CAT_FLOW:
-        return True
+    stem = os.path.splitext(fname)[0]
+    for text in (stem, unit):
+        v = _source_says(text)
+        if v:
+            return v == 'bank'
     low = path.lower()
     try:
+        if os.path.getsize(long_path(path)) > _MAX_CONTENT_BYTES:
+            return False
         if low.endswith(('.xlsx', '.xlsm', '.xls', '.csv')):
             head = _head_text_table(path)
-            return sum(1 for c in _ACCOUNT_COLS if c in head) >= 1
+            if _looks_like_flow_text(head):
+                return True
+            return any(c in head for c in _ACCOUNT_COLS)
+        if low.endswith(('.pdf', '.docx', '.doc', '.txt')):
+            from .content_match import extract_text
+            return _looks_like_flow_text(extract_text(path, max_chars=4000) or '')
     except Exception:
         pass
     return False
 
 
-def detect_category(path, fname=None):
-    """返回 '银行流水' 或 '其他数据'。读内容失败时只按文件名判断。"""
-    fname = fname or os.path.basename(path)
-    if _FLOW_NAME.search(fname):
-        return CAT_FLOW
-    try:
-        if os.path.getsize(long_path(path)) > _MAX_CONTENT_BYTES:
-            return CAT_OTHER
-    except OSError:
-        return CAT_OTHER
-    low = path.lower()
-    try:
-        if low.endswith(('.xlsx', '.xlsm', '.xls', '.csv')):
-            if _looks_like_flow_text(_head_text_table(path)):
-                return CAT_FLOW
-        elif low.endswith(('.pdf', '.docx', '.doc', '.txt')):
-            from .content_match import extract_text
-            if _looks_like_flow_text(extract_text(path, max_chars=4000) or ''):
-                return CAT_FLOW
-    except Exception:
-        pass
-    return CAT_OTHER
+def detect_category(path, fname=None, unit=''):
+    """返回 '银行流水'(银行/支付机构的全部反馈:账户信息、交易流水等)或 '其他数据'。"""
+    return CAT_FLOW if is_bank_related(path, fname, unit) else CAT_OTHER

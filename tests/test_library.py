@@ -65,7 +65,10 @@ def test_detect_category(tmp_path):
     assert detect_category(flow) == '银行流水'
     acct = xlsx(tmp_path / '账户信息.xlsx',
                 [['姓名', '证件号', '账号', '开户日期', '余额'], ['张三', ID, '6222', '2020-01-01', 10]])
-    assert detect_category(acct) == '其他数据'
+    assert detect_category(acct) == '银行流水'            # 银行账户信息也归银行
+    house = xlsx(tmp_path / '不动产信息.xlsx',
+                 [['权利人', '证件号', '坐落', '面积'], ['张三', ID, '某小区1号楼', 90]])
+    assert detect_category(house) == '其他数据'
     t = tmp_path / '张三_对账单.pdf'; t.write_bytes(b'%PDF')
     assert detect_category(str(t)) == '银行流水'          # 文件名即可判断
 
@@ -80,7 +83,7 @@ def test_multiple_archives_one_folder_by_category(tmp_path):
     person = out / f'张三_{ID}'
     assert files_under(person) == sorted([
         os.path.join('银行流水', '【建设银行】张三_查询结果.xlsx'),
-        os.path.join('其他数据', '【建设银行】张三_开户信息.txt'),
+        os.path.join('银行流水', '【建设银行】张三_开户信息.txt'),
         os.path.join('其他数据', '【房产中心】张三_房产信息.txt'),
         os.path.join('疑似空值', '【工商银行】张三_回函.txt'),
     ])
@@ -96,7 +99,7 @@ def test_incremental_import_merges_and_report_accumulates(tmp_path):
     _logs, r = run({'工商银行.zip': {'张三_账户情况.txt': '开户行:海淀支行,账号9555…' * 3}},
                    out, f'张三,{ID}')
     person = out / f'张三_{ID}'
-    assert sorted(os.listdir(person / '其他数据')) == [
+    assert sorted(os.listdir(person / '银行流水')) == [
         '【工商银行】张三_账户情况.txt', '【建设银行】张三_开户信息.txt']
     wb = openpyxl.load_workbook(out / '反馈核对表.xlsx')
     rows = [[c.value for c in row] for row in wb.active.iter_rows()]
@@ -112,7 +115,7 @@ def test_reimport_same_archive_is_skipped(tmp_path):
     run(batch, out, f'张三,{ID}')
     _logs, r = run(batch, out, f'张三,{ID}')          # 不小心又导入一次
     assert r['reimport_skipped'] == 1
-    assert os.listdir(out / f'张三_{ID}' / '其他数据') == ['【建设银行】张三_开户信息.txt']
+    assert os.listdir(out / f'张三_{ID}' / '银行流水') == ['【建设银行】张三_开户信息.txt']
     wb = openpyxl.load_workbook(out / '反馈核对表.xlsx')
     rows = [[c.value for c in row] for row in wb.active.iter_rows()]
     me = next(x for x in rows if x[0] == f'张三_{ID}')
@@ -134,7 +137,7 @@ def test_name_only_folder_upgraded_when_id_arrives(tmp_path):
         out, f'张三,{ID}')
     assert not (out / '张三').exists()                       # 升级改名,没有分家
     person = out / f'张三_{ID}'
-    assert len(os.listdir(person / '其他数据')) == 2
+    assert len(os.listdir(person / '银行流水')) == 2
     ledger = (out / LEDGER_NAME).read_text(encoding='utf-8')
     assert '"rename"' in ledger
     wb = openpyxl.load_workbook(out / '反馈核对表.xlsx')
@@ -160,3 +163,49 @@ def test_library_does_not_merge_ambiguous_names(tmp_path):
     lib = Library(str(out))
     assert lib.resolve('王伟') == '王伟'          # 两个王伟,只有名字时不乱并
     assert lib.resolve(f'王伟_{other}') == f'王伟_{other}'
+
+
+# 用户给出的常见调取清单
+NON_BANK_SOURCES = [
+    '人社厅个人基本信息', '省卫生和健康委员会全员人口基本信息', '国土自然资源厅信息',
+    '人社厅社保信息', '不动产信息', '出生医学证明', '保险信息',
+    '公安部出入境记录信息', '公安部出入境证件信息', '公安部旅馆住宿人员信息',
+    '公安部人口和户籍信息', '铁路总公司票面信息', '铁路总公司同行人信息',
+]
+BANK_SOURCES = ['人民银行账户信息', '中国工商银行', '中国农业银行股份有限公司',
+                '建行', '招商银行信用卡中心', '某某农村商业银行', '支付宝']
+
+
+def test_source_list_classification(tmp_path):
+    from fac.doctype import is_bank_related
+    t = tmp_path / 'a.txt'; t.write_text('x', encoding='utf-8')
+    for src in NON_BANK_SOURCES:
+        # 文件名或来源单位是这些 → 都不是银行(即使表头带"个人账户/银行账号")
+        assert not is_bank_related(str(t), f'张三_{src}.xlsx', ''), src
+        assert not is_bank_related(str(t), '张三.xlsx', src), src
+    for src in BANK_SOURCES:
+        assert is_bank_related(str(t), f'张三_{src}.xlsx', ''), src
+        assert is_bank_related(str(t), '张三.xlsx', src), src
+    # 社保表里有银行账号列,但来源是社保 → 仍是其他数据
+    sb = xlsx(tmp_path / '社保.xlsx', [['姓名', '个人账户', '发放银行账号'], ['张三', '1', '6222']])
+    assert not is_bank_related(sb, '张三_人社厅社保信息.xlsx', '人社厅')
+
+
+def test_bank_files_go_to_bank_folder_and_pboc_never_empty(tmp_path):
+    flow = xlsx(tmp_path / 'f.xlsx', [['日期', '金额', '对方'], ['2024-01-02', 100, '李四']])
+    pboc = xlsx(tmp_path / 'p.xlsx', [['姓名', '证件号码', '开户银行', '账号', '账户状态']])
+    out = tmp_path / 'out'
+    run({'第一批反馈.zip': {
+            '张三_工商银行.xlsx': flow,                 # 表头不标准,但文件名有银行
+            '张三_农业银行交易.xlsx': flow,
+            '张三_人民银行账户信息.xlsx': pboc,        # 只有表头也不能算疑似空值
+            '张三_公安部出入境记录信息.txt': '无出入境记录',
+            '张三_铁路总公司票面信息.txt': '车次G1 北京南-上海虹桥 2024-01-02' * 2}},
+        out, f'张三,{ID}', empty_detect=True)
+    person = out / f'张三_{ID}'
+    assert sorted(os.listdir(person / '银行流水')) == [
+        '【第一批反馈】张三_人民银行账户信息.xlsx', '【第一批反馈】张三_农业银行交易.xlsx',
+        '【第一批反馈】张三_工商银行.xlsx']
+    assert sorted(os.listdir(person / '其他数据')) == [
+        '【第一批反馈】张三_公安部出入境记录信息.txt', '【第一批反馈】张三_铁路总公司票面信息.txt']
+    assert not (person / '疑似空值').exists()

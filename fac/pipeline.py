@@ -19,7 +19,7 @@ from .rules import Rule, match_rules
 from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
 from .company import build_company_map, CompanyMatcher
 from .emptyfile import empty_reason, BUCKET_EMPTY, DEFAULT_MAX_KB
-from .doctype import detect_category, is_bank_related
+from .doctype import detect_category, is_bank_related, is_pboc
 from .library import Library, SPECIAL_FOLDERS
 from . import extract as ex
 from .report import write_matrix_report
@@ -211,7 +211,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             if folder in SPECIAL_FOLDERS:
                 base = os.path.join(opts.out_dir, folder)
             else:
-                cat = sub or category or detect_category(src, fname)
+                cat = sub or category or detect_category(src, fname, unit)
                 base = os.path.join(opts.out_dir, folder, cat)
             if unit:
                 name = f'【{unit}】{fname}'
@@ -469,7 +469,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 summary['merged_into'] += 1
             if opts.unit_mode == 'category' and not item.empty and \
                     not all(t in SPECIAL_FOLDERS for t in item.targets):
-                item.category = detect_category(item.src, item.fname)
+                item.category = detect_category(item.src, item.fname, item.unit)
 
         # ---- 4. 预览确认(试运行) ----
         if opts.preview and confirm_cb is not None:
@@ -570,6 +570,8 @@ def _mark_empty(plan, opts: JobOptions, tee):
             continue
         if not is_bank_related(item.src, item.fname, item.unit):
             continue
+        if is_pboc(item.fname, item.unit):
+            continue          # 人民银行账户信息:汇总性质,一律当作有效数据
         # 被查询对象的姓名/证号:表格里只出现这些不算"有内容"
         kws = []
         for p in item.persons or []:

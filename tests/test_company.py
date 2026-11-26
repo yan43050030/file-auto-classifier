@@ -152,3 +152,10 @@ def test_pipeline_auto_company_can_be_disabled(tmp_path):
     _run(JobOptions([str(src)], str(out), Roster([]), auto_company=False,
                     intelligent=False))
     assert list((out / '未分类').rglob('甲乙科技有限公司_流水.pdf'))
+
+
+def test_data_source_agencies_not_companies():
+    f = find_company_names
+    assert f('张三_铁路总公司票面信息.xlsx') == []
+    assert f('中国铁路总公司同行人信息.xlsx') == []
+    assert f('某某科技有限公司_铁路总公司票面信息.xlsx') == ['某某科技有限公司']
