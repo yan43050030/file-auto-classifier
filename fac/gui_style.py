@@ -34,7 +34,13 @@ QPushButton#btnRun {{
     font-weight: 600; padding: 10px 32px;
 }}
 QPushButton#btnRun:hover {{ background: {PRIMARY_HOVER}; }}
-QPushButton#btnRun:disabled {{ background: #94A3B8; }}
+QPushButton#btnRun[mode="organize"] {{ background: #EA580C; }}
+QPushButton#btnRun[mode="organize"]:hover {{ background: #C2410C; }}
+QPushButton#btnRun:disabled, QPushButton#btnRun[mode="organize"]:disabled {{ background: #94A3B8; }}
+QToolTip {{
+    background: #FFFFFF; color: {TEXT}; border: 1px solid {BORDER};
+    padding: 6px 8px; font-size: 12px;
+}}
 QPushButton#btnCancel {{
     background: {DANGER}; color: white; border: none; font-size: 13px;
     padding: 8px 20px;

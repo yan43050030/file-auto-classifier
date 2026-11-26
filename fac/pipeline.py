@@ -20,9 +20,10 @@ from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
 from .company import build_company_map, CompanyMatcher, known_names_from_files
 from .emptyfile import empty_reason, BUCKET_EMPTY, DEFAULT_MAX_KB
 from .doctype import detect_category, is_bank_related, is_pboc
-from .library import Library, SPECIAL_FOLDERS
+from .library import Library, SPECIAL_FOLDERS, parse_folder
+from .naming import shorten_name, shorten_unit, with_date
 from . import extract as ex
-from .report import write_matrix_report
+from .report import write_matrix_report, write_name_map
 
 _RULE_CN = {
     'ext': '扩展名', 'size_gt': '文件大于', 'size_lt': '文件小于',
@@ -47,7 +48,7 @@ class JobOptions:
                  rules=None, intelligent=True,
                  intelligent_min_freq=10, intelligent_exclude=None,
                  auto_company=True, empty_detect=False,
-                 empty_max_kb=DEFAULT_MAX_KB):
+                 empty_max_kb=DEFAULT_MAX_KB, short_names=False):
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.roster = roster
@@ -71,11 +72,14 @@ class JobOptions:
         # (界面/命令行/配置默认开启;库接口默认关闭以保持旧行为)
         self.empty_detect = empty_detect
         self.empty_max_kb = max(1, int(empty_max_kb or DEFAULT_MAX_KB))
+        # 文件名精简:「【单位】信息_姓名_证号」,去掉文号/批次号等噪音
+        # (界面/命令行/配置默认开启;库接口默认关闭以保持旧行为)
+        self.short_names = short_names
 
 
 class PlanItem:
     __slots__ = ('src', 'fname', 'unit', 'action', 'targets', 'persons', 'via',
-                 'empty', 'category')
+                 'empty', 'category', 'new_name')
 
     def __init__(self, src, fname, unit, action, targets, persons=None, via=''):
         self.src = src            # 临时目录里的文件路径
@@ -87,6 +91,7 @@ class PlanItem:
         self.via = via            # 命中方式: 文件名/内容/身份证号/未分类
         self.empty = ''           # 非空 = 疑似空值的原因(放入 目标/疑似空值/)
         self.category = ''        # 资料类型(银行流水/其他数据),unit_mode=category 时用
+        self.new_name = ''        # 精简后的文件名(预览显示用;实际以存放时为准)
 
     def display_target(self):
         if self.action == 'split':
@@ -205,7 +210,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         unit_mode=subfolder: 人员/[疑似空值/]单位/文件名(旧方式)
         核对表始终计在 folder(此人)名下。"""
         folder = lib.resolve(folder)
-        name = fname
+        name, label, date = _target_name(fname, unit, folder, opts)
         cat = ''
         if opts.unit_mode == 'category':
             if folder in SPECIAL_FOLDERS:
@@ -213,17 +218,12 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             else:
                 cat = sub or category or detect_category(src, fname, unit)
                 base = os.path.join(opts.out_dir, folder, cat)
-            if unit:
-                name = f'【{unit}】{fname}'
         else:
             base = os.path.join(opts.out_dir, folder, sub) if sub else \
                 os.path.join(opts.out_dir, folder)
             cat = sub
-            if unit:
-                if opts.unit_mode == 'subfolder':
-                    base = os.path.join(base, safe_folder_name(unit))
-                elif opts.unit_mode == 'prefix':
-                    name = f'【{unit}】{fname}'
+            if unit and opts.unit_mode == 'subfolder':
+                base = os.path.join(base, safe_folder_name(label or unit))
         # 重复导入:同一单位、同名、同内容的文件已经在归档库里 → 跳过
         dup, digest = lib.already_imported(folder, unit or '', fname, src,
                                            os.path.join(base, name))
@@ -243,6 +243,9 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             except Exception:
                 pass
         os.makedirs(long_path(base), exist_ok=True)
+        # 精简后重名(内容不同,如两批保险信息):先补上原文号块里的日期,再不行加 (1)
+        if date and os.path.exists(long_path(os.path.join(base, name))):
+            name = with_date(name, date)
         dst = unique_path(base, name)
         if move:
             shutil.move(long_path(src), long_path(dst))
@@ -473,6 +476,9 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             if opts.unit_mode == 'category' and not item.empty and \
                     not all(t in SPECIAL_FOLDERS for t in item.targets):
                 item.category = detect_category(item.src, item.fname, item.unit)
+            if opts.short_names and item.targets:
+                item.new_name = _target_name(item.fname, item.unit,
+                                             item.targets[0], opts)[0]
 
         # ---- 4. 预览确认(试运行) ----
         if opts.preview and confirm_cb is not None:
@@ -530,6 +536,10 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         cum, cum_empty = lib.cumulative_matrix()
         reports = write_matrix_report(opts.out_dir, cum or matrix, tee,
                                       empty=cum_empty if cum else empty_matrix)
+        if opts.short_names:
+            nm = write_name_map(opts.out_dir, lib.file_records(), tee)
+            if nm:
+                reports.append(nm)
         summary['reports'] = reports
         for r in reports:
             tee(f'已生成反馈核对表: {os.path.basename(r)}')
@@ -559,6 +569,27 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 pass
         if done_cb:
             done_cb(summary)
+
+
+def _target_name(fname, unit, folder, opts):
+    """计算存放时的文件名。返回 (文件名, 单位标签, 重名时可补的日期)。
+
+    开启精简:「【精简单位】信息_姓名_证号.ext」;单位精简后为空就不加前缀。
+    未开启:原样「【单位】原文件名」(按 unit_mode)。"""
+    label, date = unit or '', ''
+    name = fname
+    if opts.short_names:
+        label = shorten_unit(unit) if unit else ''
+        who_name = who_code = ''
+        extra = []
+        if folder not in SPECIAL_FOLDERS:
+            who_name, who_code = parse_folder(folder)
+            if who_code and len(who_code) == 18 and who_code[:17].isdigit():
+                extra.append(who_code[:6] + who_code[8:17])     # 15 位老证号写法
+        name, date = shorten_name(fname, who_name, who_code, extra)
+    if label and opts.unit_mode in ('category', 'prefix'):
+        name = f'【{label}】{name}'
+    return name, label, date
 
 
 def _mark_empty(plan, opts: JobOptions, tee):

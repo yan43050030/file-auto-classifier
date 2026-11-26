@@ -20,6 +20,41 @@ def _fixed_path(out_dir, name):
     return p
 
 
+def write_name_map(out_dir, records, log=None):
+    """《文件名对照表》:原文件名 ↔ 现在存放的位置与名称(按历次导入累计)。"""
+    rows = [[r['time'].replace('T', ' '), r['unit'], r['name'],
+             os.path.basename(r['path']), os.path.dirname(r['path'])]
+            for r in records]
+    if not rows:
+        return None
+    header = ['导入时间', '来源单位(压缩包)', '原文件名', '现文件名', '所在文件夹']
+    try:
+        import openpyxl
+        from openpyxl.styles import Font
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '文件名对照表'
+        ws.append(header)
+        for c in ws[1]:
+            c.font = Font(bold=True)
+        for r in rows:
+            ws.append(r)
+        for col, w in zip('ABCDE', (18, 24, 60, 40, 40)):
+            ws.column_dimensions[col].width = w
+        ws.freeze_panes = 'A2'
+        p = _fixed_path(out_dir, '文件名对照表.xlsx')
+        wb.save(p)
+    except ImportError:
+        p = _fixed_path(out_dir, '文件名对照表.csv')
+        with open(p, 'w', newline='', encoding='utf-8-sig') as fp:
+            w = csv.writer(fp)
+            w.writerow(header)
+            w.writerows(rows)
+    if log:
+        log(f'已更新文件名对照表: {os.path.basename(p)}(可按原文件名查到现在的位置)')
+    return p
+
+
 def write_matrix_report(out_dir: str, matrix: dict, log, empty=None):
     """matrix: {(folder, unit): count}。生成 CSV(Excel 可直接打开);
     装了 openpyxl 时同时生成 xlsx。返回生成的文件路径列表。

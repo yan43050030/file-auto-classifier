@@ -266,8 +266,8 @@ def test_classify_nested_archive_end_to_end(win, app, tmp_path, monkeypatch):
     win._start()
     assert _pump(app, lambda: bool(done), timeout=30)
     tm.stop()
-    assert list((out / '张三').rglob('*张三_身份证.txt'))
-    assert list((out / '李四').rglob('*李四_材料.pdf'))
+    assert list((out / '张三').rglob('*身份证_张三.txt'))     # 默认精简文件名
+    assert list((out / '李四').rglob('*材料_李四.pdf'))
 
 
 def test_theme_ignores_windows_dark_mode(app):
@@ -369,3 +369,29 @@ def test_old_config_migrates_to_category(tmp_path, monkeypatch):
     p.write_text(json.dumps({'unit_mode': 'subfolder', 'layout_v46': True}),
                  encoding='utf-8')                  # 迁移后用户又选回旧方式 → 尊重
     assert conf.load_config()['unit_mode'] == 'subfolder'
+
+
+def test_every_option_has_tooltip(win):
+    from PySide6.QtWidgets import QAbstractButton
+    btns = [b for b in win.findChildren(QAbstractButton) if b.text().strip()]
+    missing = [b.text() for b in btns if not b.toolTip()]
+    assert len(btns) > 40 and not missing, missing
+    for attr in ('txt_out', 'cmb_mode', 'txt_roster', 'spin_emptykb', 'cmb_layout'):
+        assert getattr(win, attr).toolTip(), attr
+
+
+def test_mode_banner_and_button_color(win):
+    win.cmb_mode.setCurrentIndex(0)
+    assert '按人归档' in win.lbl_banner.text() and '按人归档' in win.windowTitle()
+    assert win.btn_run.property('mode') == 'person'
+    win.cmb_mode.setCurrentIndex(1)
+    assert '文件整理' in win.lbl_banner.text() and '文件整理' in win.windowTitle()
+    assert win.btn_run.property('mode') == 'organize'
+    assert win.btn_run.toolTip().startswith('文件整理')
+
+
+def test_short_names_option(win):
+    assert win.ck_short.isChecked()
+    assert win._gather_cfg()['short_names'] is True
+    opts = win._organize_opts(str(win.txt_out.text() or '.'))
+    assert opts.library_mode == 'ask'                 # 文件整理遇到归档库会询问

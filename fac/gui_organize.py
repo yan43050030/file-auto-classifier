@@ -44,7 +44,8 @@ class OrganizeMixin:
             extract_archives=self._ckg['org_extract'].isChecked(),
             keep_projects=self._ckg['org_keep_proj'].isChecked(),
             skip_hidden=not self._ckg['org_hidden'].isChecked(),
-            min_dup_size=self.spin_mindup.value() * 1024)
+            min_dup_size=self.spin_mindup.value() * 1024,
+            library_mode='ask')
 
     def _start_organize(self, out):
         opts = self._organize_opts(out)
@@ -68,8 +69,33 @@ class OrganizeMixin:
             target=run_organize,
             args=(opts, self._log, self._on_progress,
                   self._confirm_plan, self._cancel, done,
-                  self._ask_password),
+                  self._ask_password, self._ask_library),
             daemon=True).start()
+
+    def _ask_library(self, libs):
+        """(后台线程调用)发现「按人归档」的归档库时,在主线程询问怎么处理。
+        返回 'keep' / 'organize' / None(取消)。"""
+        def ask():
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle('发现按人归档的归档库')
+            shown = '\n'.join(libs[:5]) + (f'\n…共 {len(libs)} 个' if len(libs) > 5 else '')
+            box.setText('所选位置里有「按人归档」生成的归档库(含 归档记录.jsonl):\n\n'
+                        f'{shown}\n\n'
+                        '一起整理会把各人员/企业文件夹里的文件按类型、年份打散,'
+                        '通常不希望这样。要怎么处理?')
+            keep = box.addButton('保持不动(推荐)', QMessageBox.AcceptRole)
+            org = box.addButton('一起整理', QMessageBox.DestructiveRole)
+            box.addButton('取消', QMessageBox.RejectRole)
+            box.setDefaultButton(keep)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is keep:
+                return 'keep'
+            if clicked is org:
+                return 'organize'
+            return None
+        return self._bridge.call_sync(ask)
 
     def _search_history(self):
         """按文件名查历次整理:这个文件当初在哪、被整理到哪去了。"""

@@ -64,7 +64,8 @@ class OrganizeOptions:
                  extract_archives=False,   # 先把压缩包解开再一起整理
                  keep_projects=True,       # 代码/工程目录整体保留不打散
                  min_dup_size=None,        # 查重最小体积(None=用默认 10KB)
-                 keep_origin_dir=True):    # 体检桶里保留原目录名一层,便于核对
+                 keep_origin_dir=True,     # 体检桶里保留原目录名一层,便于核对
+                 library_mode='keep'):     # 遇到「按人归档」的归档库:keep|organize|ask
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.layout = layout or '{类别}/{年}'
@@ -88,6 +89,8 @@ class OrganizeOptions:
         self.min_dup_size = (health.DEFAULT_MIN_DUP_SIZE
                              if min_dup_size is None else int(min_dup_size))
         self.keep_origin_dir = keep_origin_dir
+        self.library_mode = library_mode if library_mode in ('keep', 'organize', 'ask') \
+            else 'keep'
 
 
 class OrganizeItem:
@@ -158,13 +161,34 @@ def render_layout(layout: str, fname: str, mtime: float, source=None,
 
 # ---------- 收集文件 ----------
 
+def find_libraries(inputs, out_dir=None):
+    """找出输入里的「按人归档」归档库(含 归档记录.jsonl 的文件夹),最外层为准。"""
+    from .library import LEDGER_NAME
+    found = []
+    for p in inputs:
+        p_abs = os.path.abspath(p)
+        if not os.path.isdir(p_abs):
+            continue
+        for root, dirs, names in os.walk(p_abs):
+            if LEDGER_NAME in names:
+                found.append(os.path.abspath(root))
+                dirs[:] = []
+    return found
+
+
+def _within(path, roots):
+    ap = os.path.abspath(path)
+    return any(ap == r or ap.startswith(r + os.sep) for r in roots)
+
+
 def collect_files(inputs, out_dir, skip_hidden=True, log=None,
-                  project_roots=None):
+                  project_roots=None, skip_roots=None):
     """遍历输入目录收集文件。返回 [(path, size, mtime), …]。
 
     整理结果目录本身会被跳过(除非它就是输入目录 —— 即"原地整理")。"""
     out_abs = os.path.abspath(out_dir)
     project_roots = set(project_roots or ())
+    skip_roots = [os.path.abspath(r) for r in (skip_roots or ())]
     in_roots = {os.path.abspath(p) for p in inputs}
     in_place = out_abs in in_roots        # 原地整理:不能把输出目录整个跳过
     files, seen = [], set()
@@ -174,6 +198,8 @@ def collect_files(inputs, out_dir, skip_hidden=True, log=None,
 
     for p in inputs:
         p_abs = os.path.abspath(p)
+        if skip_roots and _within(p_abs, skip_roots):
+            continue                      # 归档库:保持不动
         if os.path.isfile(p_abs):
             _add(files, seen, p_abs)
             continue
@@ -190,6 +216,9 @@ def collect_files(inputs, out_dir, skip_hidden=True, log=None,
             if root_abs in project_roots:
                 dirs[:] = []          # 项目目录整体搬运,内部不逐个收集
                 continue
+            if skip_roots and _within(root_abs, skip_roots):
+                dirs[:] = []          # 归档库:保持不动
+                continue
             if skip_hidden:
                 dirs[:] = [d for d in dirs if not d.startswith('.')]
             for n in names:
@@ -204,8 +233,9 @@ def _add(files, seen, path):
         return
     # 工具自己产生的台账/报告/日志不参与整理
     base = os.path.basename(path)
-    if base.startswith(('整理台账_', '整理报告', '分类日志_', '反馈核对表')) \
-            or base == '整理历史.db':
+    if base.startswith(('整理台账_', '整理报告', '分类日志_', '反馈核对表',
+                        '文件名对照表')) \
+            or base in ('整理历史.db', '归档记录.jsonl'):
         return
     try:
         st = os.stat(long_path(path))
@@ -355,7 +385,7 @@ def build_plan(files, opts, log=None, cancel=None, progress=None,
 
 def run_organize(opts: OrganizeOptions, log, progress,
                  confirm_cb=None, cancel_event=None, done_cb=None,
-                 ask_password=None):
+                 ask_password=None, ask_library=None):
     """执行一次文件整理(应在后台线程调用)。"""
     summary = {'files': 0, 'moved': 0, 'copied': 0, 'failed': 0,
                'cancelled': False, 'reports': [], 'journal': '',
@@ -388,12 +418,34 @@ def run_organize(opts: OrganizeOptions, log, progress,
         # ---- 1. 扫描 ----
         tee('开始扫描文件...')
         progress('scan', 0, 1)
+        # 「按人归档」的归档库(含 归档记录.jsonl):默认保持不动,界面上会先询问
+        skip_roots = []
+        libs = find_libraries(opts.inputs, opts.out_dir)
+        if libs:
+            decision = opts.library_mode
+            if decision == 'ask':
+                decision = ask_library(libs) if ask_library else 'keep'
+            if decision is None:
+                tee('已取消:未移动任何文件。')
+                summary['cancelled'] = True
+                return
+            if decision == 'organize':
+                tee(f'[归档库] 发现 {len(libs)} 个按人归档的归档库,按你的选择一起整理。')
+            else:
+                skip_roots = libs
+                tee(f'[归档库] 发现 {len(libs)} 个按人归档的归档库,保持不动、不参与整理:')
+                for lp in libs[:10]:
+                    tee(f'  {lp}')
+        summary['libraries_kept'] = len(skip_roots)
         projects = {}
         if opts.keep_projects:
             projects = proj.find_projects(opts.inputs, opts.out_dir, log=tee)
+            projects = {k: v for k, v in projects.items()
+                        if not _within(k, skip_roots)}
         files = collect_files(opts.inputs, opts.out_dir,
                               skip_hidden=opts.skip_hidden, log=tee,
-                              project_roots=set(projects))
+                              project_roots=set(projects),
+                              skip_roots=skip_roots)
         progress('scan', 1, 1)
         if not files and not projects:
             tee('未找到任何文件。请检查所选路径。')
@@ -522,7 +574,8 @@ def run_organize(opts: OrganizeOptions, log, progress,
         # ---- 5. 清理空文件夹 ----
         if opts.clean_empty_dirs and move:
             roots = [p for p in opts.inputs if os.path.isdir(p)]
-            empties = health.find_empty_dirs(roots, log=tee)
+            empties = [d for d in health.find_empty_dirs(roots, log=tee)
+                       if not _within(d, skip_roots)]
             for d in empties:
                 try:
                     os.rmdir(long_path(d))

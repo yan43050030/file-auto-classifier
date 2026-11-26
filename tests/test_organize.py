@@ -676,3 +676,56 @@ def test_extract_archives_keeps_loose_original(tmp_path):
                                    extract_archives=True))
     assert (out / 'PDF' / '2024' / '合同.pdf').exists()
     assert list((out / BUCKET_DUP).rglob('合同.pdf'))
+
+
+# ---------- 归档库保护 ----------
+
+def _make_library(root):
+    """模拟「按人归档」生成的结果目录。"""
+    mk(root / '张三_110' / '银行流水' / '【工行】流水.xlsx', b'F' * 20000)
+    mk(root / '张三_110' / '其他数据' / '户籍.txt', b'H' * 20000)
+    (root / '归档记录.jsonl').write_text('{"type":"file"}\n', encoding='utf-8')
+
+
+def test_archive_library_kept_by_default(tmp_path):
+    src = tmp_path / 'src'
+    mk(src / '下载' / '报告.docx', b'R' * 20000)
+    _make_library(src / '分类结果')
+    out = tmp_path / 'out'
+    logs, r = run(OrganizeOptions([str(src)], str(out), preview=False))
+    assert (src / '分类结果' / '张三_110' / '银行流水' / '【工行】流水.xlsx').exists()
+    assert (src / '分类结果' / '归档记录.jsonl').exists()
+    assert not (src / '下载' / '报告.docx').exists()          # 其他文件照常整理
+    assert r['libraries_kept'] == 1
+    assert any('归档库' in m for m in logs)
+
+
+def test_archive_library_ask_keep_organize_cancel(tmp_path):
+    for choice in ('keep', 'organize', None):
+        base = tmp_path / str(choice)
+        src = base / 'src'
+        _make_library(src / '分类结果')
+        out = base / 'out'
+        asked = []
+        result = {}
+        run_organize(OrganizeOptions([str(src)], str(out), preview=False,
+                                     library_mode='ask'),
+                     log=lambda m: None, progress=lambda *a: None,
+                     done_cb=result.update,
+                     ask_library=lambda libs: asked.append(libs) or choice)
+        assert len(asked) == 1 and asked[0][0].endswith('分类结果')
+        flow = src / '分类结果' / '张三_110' / '银行流水' / '【工行】流水.xlsx'
+        if choice == 'organize':
+            assert not flow.exists()
+            assert (src / '分类结果' / '归档记录.jsonl').exists()   # 记录文件始终不动
+        else:
+            assert flow.exists()
+        if choice is None:
+            assert result['cancelled']
+
+
+def test_selecting_library_itself_keeps_it(tmp_path):
+    lib = tmp_path / '分类结果'
+    _make_library(lib)
+    logs, r = run(OrganizeOptions([str(lib)], str(tmp_path / 'out'), preview=False))
+    assert (lib / '张三_110' / '其他数据' / '户籍.txt').exists()

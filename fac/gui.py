@@ -36,6 +36,7 @@ from . import extract as ex
 
 from .gui_style import QSS, TEXT_SEC, CARD_BG, BORDER, apply_theme  # noqa: F401
 from .gui_organize import OrganizeMixin
+from .gui_tips import apply_tooltips, TIPS
 from .gui_bridge import UiBridge, in_main_thread
 
 # ---------- 拖拽 ----------
@@ -111,6 +112,8 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self._gc_timer.start()
         self._apply_cfg(conf.load_config())
         self._set_icon()
+        apply_tooltips(self)
+        self._on_mode_changed()
 
     def _set_icon(self):
         try:
@@ -126,6 +129,12 @@ class MainWindow(OrganizeMixin, QMainWindow):
         main = QVBoxLayout(cw)
         main.setContentsMargins(12, 8, 12, 8)
         main.setSpacing(8)
+
+        # 当前工作模式横幅:两种模式颜色不同,一眼看出现在在做什么
+        self.lbl_banner = QLabel()
+        self.lbl_banner.setObjectName('modeBanner')
+        self.lbl_banner.setWordWrap(True)
+        main.addWidget(self.lbl_banner)
 
         # ── 用 QSplitter 让各部分可拖拽调整大小 ──
         splitter = QSplitter(Qt.Vertical)
@@ -338,6 +347,16 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self._rg_unit.addButton(u2, 1); ol.addWidget(u2)
         u3 = QRadioButton('不标注来源')
         self._rg_unit.addButton(u3, 2); ol.addWidget(u3)
+        ol.addWidget(self._sep())
+        self.ck_short = QCheckBox('精简文件名:去掉文号/批次号等,改为「【单位】信息_姓名_证号」')
+        self.ck_short.setChecked(True)
+        ol.addWidget(self.ck_short)
+        tip = QLabel('例:【某某查【2026】第123456号_2026年11月11日】张三_2303…_某某查【2026】'
+                     '第123456号_保险信息.xlsx → 保险信息_张三_2303….xlsx;'
+                     '原名记入《文件名对照表》,不影响重复导入识别')
+        tip.setWordWrap(True)
+        tip.setStyleSheet(f'color:{TEXT_SEC};font-size:11px;margin-left:22px;')
+        ol.addWidget(tip)
         ol.addStretch()
         tabs.addTab(self._scroll(to), '⚙ 分类选项')
 
@@ -744,6 +763,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             'multi_hit': 'first' if self._rb_multi.checkedId() == 0 else 'each',
             'unit_mode': self._unit_mode(),
             'out_fixed': self.ck_out_fixed.isChecked(),
+            'short_names': self.ck_short.isChecked(),
             'layout_v46': True,
             'pw_file': self.txt_pwfile.text().strip(),
             'rules': [r.to_dict() for r in self._get_rules()],
@@ -774,6 +794,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             bid = {v: k for k, v in self._UNIT_MODES.items()}.get(um, 3)
             self._rg_unit.button(bid).setChecked(True)
             self.ck_out_fixed.setChecked(bool(cfg.get('out_fixed', False)))
+            self.ck_short.setChecked(bool(cfg.get('short_names', True)))
             self._out_manual = self.ck_out_fixed.isChecked()
             self.txt_pwfile.setText(cfg.get('pw_file', ''))
             self.spin_minfreq.setValue(int(cfg.get('intelligent_min_freq', 10)))
@@ -884,17 +905,20 @@ class MainWindow(OrganizeMixin, QMainWindow):
             tip.setStyleSheet(f'color:{TEXT_SEC};')
             lay.addWidget(tip)
             tree = QTreeWidget()
-            tree.setHeaderLabels(['文件名', '来源单位', '归入文件夹', '命中方式'])
+            show_new = any(getattr(i, 'new_name', '') for i in plan)
+            tree.setHeaderLabels(['文件名', '来源单位', '归入文件夹', '命中方式']
+                                 + (['存为(精简后的文件名)'] if show_new else []))
             tree.setAlternatingRowColors(True)
             tree.setRootIsDecorated(False)
             tree.setSelectionMode(QTreeWidget.ExtendedSelection)
             tree.setEditTriggers(QTreeWidget.NoEditTriggers)
             rows = []       # (QTreeWidgetItem, PlanItem)
             for item in plan:
-                it = QTreeWidgetItem(tree, [item.fname, item.unit,
-                                            item.display_target(),
-                                            getattr(item, 'preview_via',
-                                                    lambda: item.via)()])
+                cols = [item.fname, item.unit, item.display_target(),
+                        getattr(item, 'preview_via', lambda: item.via)()]
+                if show_new:
+                    cols.append(getattr(item, 'new_name', '') or item.fname)
+                it = QTreeWidgetItem(tree, cols)
                 if item.action == 'place':      # 拆分行不支持手改
                     it.setFlags(it.flags() | Qt.ItemIsEditable)
                 rows.append((it, item))
@@ -978,6 +1002,8 @@ class MainWindow(OrganizeMixin, QMainWindow):
             self._auto_out()
         self._last_mode = mode
         self.btn_run.setText('▶  开始整理' if organize else '▶  开始分类')
+        self.btn_run.setToolTip(TIPS['▶  开始整理' if organize else '▶  开始分类'])
+        self._show_mode(organize)
         # 切到对应设置页,避免用户改错地方
         try:
             if organize:
@@ -986,6 +1012,28 @@ class MainWindow(OrganizeMixin, QMainWindow):
                 self._tabs.setCurrentIndex(0)
         except Exception:
             pass
+
+    _BANNERS = {
+        False: ('📋  当前模式:按人归档 —— 把各单位反馈的压缩包按人员/企业归档'
+                '(在「② 保存到 / 工作模式」里切换)',
+                '#EFF6FF', '#1D4ED8', '#BFDBFE'),
+        True: ('📁  当前模式:文件整理 —— 整理所选文件夹里的文件(默认移动,可一键撤销);'
+               '不会解开压缩包,除非勾选「顺带解开压缩包」',
+               '#FFF7ED', '#C2410C', '#FDBA74'),
+    }
+
+    def _show_mode(self, organize):
+        text, bg, fg, border = self._BANNERS[bool(organize)]
+        self.lbl_banner.setText(text)
+        self.lbl_banner.setStyleSheet(
+            f'QLabel#modeBanner{{background:{bg};color:{fg};border:1px solid {border};'
+            f'border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;}}')
+        # 开始按钮:按人归档蓝色,文件整理橙色
+        self.btn_run.setProperty('mode', 'organize' if organize else 'person')
+        self.btn_run.style().unpolish(self.btn_run)
+        self.btn_run.style().polish(self.btn_run)
+        self.setWindowTitle(f'{APP_NAME} {VERSION} —— '
+                            f'{"文件整理模式" if organize else "按人归档模式"}')
 
     def _begin_job(self):
         self.btn_run.setEnabled(False)
@@ -1043,6 +1091,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             rules=self._get_rules(),
             intelligent_min_freq=self.spin_minfreq.value(),
             empty_max_kb=self.spin_emptykb.value(),
+            short_names=self.ck_short.isChecked(),
             intelligent_exclude=[t for t in re.split(
                 r'[,，;；\s]+', self.txt_iexclude.text()) if t.strip()],
             **{k: cb.isChecked() for k, cb in self._ck.items()})

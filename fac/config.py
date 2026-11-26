@@ -18,6 +18,7 @@ DEFAULTS = {
     'empty_max_kb': 10,        # 按公司名称/统一社会信用代码自动归档
     'unit_mode': 'category',     # category | subfolder | prefix | none
     'out_fixed': False,          # 输出目录固定为归档库
+    'short_names': True,         # 精简文件名(【单位】信息_姓名_证号)
     'layout_v46': True,          # 已完成 V4.6 布局迁移的标记
     'preview': False,
     'content_match': False,

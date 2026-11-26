@@ -51,12 +51,19 @@ def build_parser():
     p.add_argument('--no-empty-detect', action='store_true',
                    help='关闭"疑似空值":默认把小于阈值且无实质内容的反馈'
                         '放入此人目录下的「疑似空值」')
+    p.add_argument('--organize-archive-libs', action='store_true',
+                   help='文件整理时连「按人归档」的归档库(含 归档记录.jsonl)也一起整理'
+                        '(默认保持不动)')
+    p.add_argument('--no-short-names', action='store_true',
+                   help='不精简文件名(默认精简为「【单位】信息_姓名_证号」,'
+                        '原名记入文件名对照表)')
     p.add_argument('--empty-kb', type=int, default=10, metavar='KB',
                    help='疑似空值的大小阈值(KB),默认 10')
-    p.add_argument('--unit-mode', choices=['subfolder', 'prefix', 'none'],
-                   default='subfolder',
-                   help='来源单位标注方式:subfolder=人员文件夹下按单位建子文件夹(默认),'
-                        'prefix=文件名加【单位】前缀,none=不标注')
+    p.add_argument('--unit-mode', choices=['category', 'subfolder', 'prefix', 'none'],
+                   default='category',
+                   help='人员/企业文件夹内怎么放:category=按资料类型分(疑似空值/银行流水/'
+                        '其他数据)+文件名加【单位】(默认);subfolder=按单位建子文件夹;'
+                        'prefix=只加【单位】前缀;none=不标注')
     p.add_argument('--content-match', action='store_true',
                    help='文件名未命中时读取 Excel/Word/PDF/文本内容匹配')
     p.add_argument('--split-excel', action='store_true',
@@ -183,6 +190,7 @@ def _run_organize(args):
         min_dup_size=max(0, args.min_dup_kb) * 1024,
         skip_hidden=not args.include_hidden,
         keep_origin_dir=not args.flat_buckets,
+        library_mode="organize" if args.organize_archive_libs else "keep",
         purge=(['可清理', '重复文件', '旧版本'] if 'all' in args.purge
                else args.purge))
     result = {}
@@ -249,6 +257,7 @@ def main(argv=None):
         copy_to_each=args.each, auto_id=not args.no_auto_id,
         auto_company=not args.no_auto_company,
         empty_detect=not args.no_empty_detect, empty_max_kb=args.empty_kb,
+        short_names=not args.no_short_names,
         unit_mode=args.unit_mode,
         content_match=args.content_match, split_excel=args.split_excel,
         dedup=args.dedup,

@@ -216,6 +216,24 @@ class Library:
                       'name': name, 'sha1': digest, 'category': category,
                       'empty': bool(empty), 'path': rel_path})
 
+    def file_records(self):
+        """全部文件记录(已套用文件夹改名),供《文件名对照表》使用。"""
+        recs = list(self._read_ledger())
+        renames = {r.get('from'): r.get('to') for r in recs if r.get('type') == 'rename'}
+        out = []
+        for r in recs:
+            if r.get('type') != 'file':
+                continue
+            path = r.get('path') or ''
+            parts = path.replace('\\', '/').split('/')
+            if parts and parts[0] in renames:
+                parts[0] = renames[parts[0]]
+                path = os.path.join(*parts)
+            out.append({'time': r.get('time', ''), 'unit': r.get('unit', ''),
+                        'name': r.get('name', ''), 'path': path,
+                        'category': r.get('category', '')})
+        return out
+
     def cumulative_matrix(self):
         """按归档记录累计:({(人员, 单位): 文件数}, {(人员, 单位): 疑似空值数})。"""
         matrix, empty = {}, {}

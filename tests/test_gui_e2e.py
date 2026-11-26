@@ -104,7 +104,7 @@ def test_all_features_through_main_window(app, tmp_path, monkeypatch):
     check('按人归档:运行完成不闪退', m and '分类完成' in m[1], (m or ('', ''))[1].split('\n')[0])
     def has(person, pat):
         return any(pat in f for r, _d, fs in os.walk(os.path.join(out, person)) for f in fs)
-    check('多层嵌套 + AES 加密(密码本自动解)', has('王五', '王五_加密材料'))
+    check('多层嵌套 + AES 加密(密码本自动解)', has('王五', '加密材料'))
     check('身份证号命中名单 → 归入李四', has('李四_'+ID_Z, ID_Z))
     check('曾用名 小张 → 归入张三', has('张三', '小张_曾用名材料'))
     check('最长匹配:张三丰 不误归张三', not has('张三', '回执001') )
@@ -114,7 +114,8 @@ def test_all_features_through_main_window(app, tmp_path, monkeypatch):
     check('按资料类型分 + 【单位】前缀',
               os.path.isfile(os.path.join(out, '张三', '其他数据', '【单位A】张三_银行流水.txt'))
               or any(f.startswith('【单位A】') for f in os.listdir(os.path.join(out, '张三', '其他数据'))))
-    check('文件名含流水 → 张三/银行流水', any(f.endswith('张三_银行流水.txt') for f in os.listdir(os.path.join(out, '张三', '银行流水'))))
+    check('文件名含流水 → 张三/银行流水 + 精简名「信息_姓名」',
+          '【单位A】银行流水_张三.txt' in os.listdir(os.path.join(out, '张三', '银行流水')))
     check('反馈核对表 xlsx', os.path.exists(os.path.join(out, '反馈核对表.xlsx')))
     check('日志文件写入输出目录', any(f.startswith('分类日志_') for f in os.listdir(out)))
     check('界面日志有内容', '分类完成' in w.log.toPlainText())
