@@ -92,6 +92,9 @@ _SUFFIXES = sorted("""
 集团 合伙企业 普通合伙 有限合伙 特殊普通合伙 农民专业合作社 专业合作社 合作社 联合社
 律师事务所 会计师事务所 税务师事务所 事务所 个体工商户 工作室 经营部 门市部 商行 商贸行
 加工厂 制品厂 分厂 厂 营业部 办事处 分店 分部
+专卖店 旗舰店 便利店 超市 商店 店 餐馆 饭馆 茶馆 照相馆 诊所 药房 大药房 美容院
+批发部 经销部 服务部 维修部 销售部 门市 加工坊 作坊 车行 网吧
+养殖场 农场 种植场 牧场 林场 渔场 果园 茶园
 """.split(), key=len, reverse=True)
 _SUFFIX_RE = re.compile('|'.join(map(re.escape, _SUFFIXES)))
 _BRANCH_RE = re.compile(
@@ -112,7 +115,19 @@ _SENDER_WORDS = (
     # 常见调取来源(数据提供方,不是被查企业)
     '铁路', '国铁', '人社', '人力资源', '卫健', '卫生', '自然资源', '国土',
     '出入境', '移民管理', '民航', '航空', '邮政', '电网', '供电',
+    '市场监督', '住宿', '征信',
 )
+
+
+# 正式的企业/组织名称后缀(正文里出现即可信);店铺类名称需在文件名中出现过
+_FORMAL_RE = re.compile(r'公司|合作社|联合社|合伙|事务所|个体工商户')
+
+
+def known_names_from_files(files, exclude=()):
+    names = set()
+    for item in files:
+        names.update(find_company_names(item[1], exclude))
+    return names
 
 
 def _norm(name: str) -> str:
@@ -189,10 +204,14 @@ def build_company_map(files, exclude=(), log=None):
 class CompanyMatcher:
     """未命中名单的文件:按公司名称 / 统一社会信用代码归档。"""
 
-    def __init__(self, name_to_code=None, code_to_name=None, exclude=()):
+    def __init__(self, name_to_code=None, code_to_name=None, exclude=(),
+                 known_names=None):
         self.n2c = dict(name_to_code or {})
         self.c2n = dict(code_to_name or {})
         self.exclude = tuple(exclude or ())
+        # 在某个文件名里出现过的名称(正文里只认这些 + 正式企业名称,
+        # 避免把流水里的交易对手"XX便利店"当成归属对象)
+        self.known = set(known_names or ()) | set(self.n2c)
 
     def _folder(self, name, code):
         if name and code:
@@ -222,6 +241,8 @@ class CompanyMatcher:
             return self._folder(self.c2n.get(c), c), '企业(内容信用代码)'
         counts = collections.Counter()
         for n in find_company_names(text, self.exclude):
+            if n not in self.known and not _FORMAL_RE.search(n):
+                continue
             counts[n] = text.count(n) or 1
         if counts:
             n = counts.most_common(1)[0][0]

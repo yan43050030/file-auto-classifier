@@ -159,3 +159,50 @@ def test_data_source_agencies_not_companies():
     assert f('张三_铁路总公司票面信息.xlsx') == []
     assert f('中国铁路总公司同行人信息.xlsx') == []
     assert f('某某科技有限公司_铁路总公司票面信息.xlsx') == ['某某科技有限公司']
+
+
+def test_individual_business_names():
+    f = find_company_names
+    assert f('张三_某某专卖店_纳税人基本信息.xlsx') == ['某某专卖店']
+    assert f('李四五金店营业执照.pdf') == ['李四五金店']
+    assert f('某某区好又多超市_对公账户.xlsx') == ['某某区好又多超市']
+    assert f('顺发养殖场.pdf') == ['顺发养殖场'] and f('王记餐馆.pdf') == ['王记餐馆']
+    # 不误认:部门、数据来源、住宿记录、单独的"商店"
+    for t in ['张三_财务部提供材料', '公安部旅馆住宿人员信息', '全国旅馆住宿信息',
+              '张三_酒店住宿记录', '张三_商店', '国家市场监督局企业基本信息查询接口服务']:
+        assert f(t) == [], t
+
+
+def test_content_ignores_counterparty_shops():
+    """流水正文里一堆交易对手"XX便利店",不能把文件归给它们。"""
+    m = CompanyMatcher(known_names={'某某专卖店'})
+    flow = '交易对手:红星便利店 金额 12.5;交易对手:红星便利店 金额 8;好又多超市 30'
+    assert m.match_content(flow) is None
+    assert m.match_content('经营者:某某专卖店,地址……')[0] == '某某专卖店'
+    assert m.match_content('纳税人名称:甲乙科技有限公司')[0] == '甲乙科技有限公司'
+
+
+def test_market_supervision_is_not_bank(tmp_path):
+    from fac.doctype import is_bank_related
+    t = tmp_path / 'a.txt'; t.write_text('x', encoding='utf-8')
+    assert not is_bank_related(str(t), '国家市场监督局企业基本信息查询接口服务.xlsx', '')
+    assert not is_bank_related(str(t), '某某专卖店_纳税人基本信息.xlsx', '')
+
+
+def test_pipeline_individual_business_with_code(tmp_path):
+    c92 = make_uscc('92110105', 'L12345AB')         # 个体工商户代码以 92 开头
+    assert valid_uscc(c92)
+    src = tmp_path / 'in'; src.mkdir()
+    with zipfile.ZipFile(src / '税务局.zip', 'w') as z:
+        z.writestr(f'某某专卖店_{c92}_纳税人基本信息.txt', '纳税人名称:某某专卖店' * 3)
+    with zipfile.ZipFile(src / '市场监管.zip', 'w') as z:
+        z.writestr('某某专卖店_企业基本信息.txt', '经营者:王五' * 3)
+    with zipfile.ZipFile(src / '农业银行.zip', 'w') as z:
+        z.writestr(f'{c92}_对公账户流水.txt', '交易日期 交易金额 余额' * 3)
+    out = tmp_path / 'out'
+    _run(JobOptions([str(src)], str(out), Roster([]), intelligent=False,
+                    unit_mode='category'))
+    folder = out / f'某某专卖店_{c92}'
+    assert sorted(os.listdir(folder)) == ['其他数据', '银行流水']
+    assert len(os.listdir(folder / '其他数据')) == 2
+    assert len(os.listdir(folder / '银行流水')) == 1

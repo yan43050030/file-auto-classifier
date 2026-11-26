@@ -17,7 +17,7 @@ from .password import PasswordManager, load_password_candidates
 from .idcard import find_ids
 from .rules import Rule, match_rules
 from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
-from .company import build_company_map, CompanyMatcher
+from .company import build_company_map, CompanyMatcher, known_names_from_files
 from .emptyfile import empty_reason, BUCKET_EMPTY, DEFAULT_MAX_KB
 from .doctype import detect_category, is_bank_related, is_pboc
 from .library import Library, SPECIAL_FOLDERS
@@ -369,7 +369,10 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             n2c, c2n = build_company_map(all_files,
                                          exclude=opts.intelligent_exclude,
                                          log=tee)
-            cmatch = CompanyMatcher(n2c, c2n, exclude=opts.intelligent_exclude)
+            cmatch = CompanyMatcher(
+                n2c, c2n, exclude=opts.intelligent_exclude,
+                known_names=known_names_from_files(all_files,
+                                                   opts.intelligent_exclude))
 
         plan = []
         for i, (fp, fname, unit) in enumerate(all_files, 1):
