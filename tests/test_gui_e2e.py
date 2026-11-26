@@ -121,7 +121,9 @@ def test_all_features_through_main_window(app, tmp_path, monkeypatch):
         p = os.path.join(org_in, p); os.makedirs(os.path.dirname(p), exist_ok=True)
         open(p, 'wb').write(b)
         if mt: os.utime(p, (mt, mt))
-    mk('报告.docx', b'R' * 20000); mk('报告(1).docx', b'R2' * 10000)
+    # 显式给出先后时间:Windows 上连续写入的两个文件修改时间可能完全相同
+    now = time.time()
+    mk('报告.docx', b'R' * 20000, now - 86400); mk('报告(1).docx', b'R2' * 10000, now)
     mk('照片.jpg', b'J' * 30000); mk('sub/照片副本.jpg', b'J' * 30000)
     mk('Thumbs.db', b'x'); mk('IMG_20180712_153000.jpg', b'P' * 15000)
     mk('proj/package.json', b'{}'); mk('proj/src/a.js', b'1')
