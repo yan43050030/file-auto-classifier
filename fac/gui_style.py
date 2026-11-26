@@ -59,6 +59,26 @@ QComboBox {{
     background: white; font-size: 12px;
 }}
 QCheckBox, QRadioButton {{ font-size: 12px; color: {TEXT}; spacing: 6px; }}
+QWidget {{ color: {TEXT}; }}
+QLabel {{ color: {TEXT}; background: transparent; }}
+QComboBox {{ color: {TEXT}; padding-right: 24px; }}
+QComboBox::drop-down {{
+    subcontrol-origin: padding; subcontrol-position: center right;
+    width: 22px; border: none; background: transparent;
+}}
+QComboBox::down-arrow {{ image: url(__ARROW__); width: 10px; height: 6px; }}
+QComboBox QAbstractItemView {{
+    background: white; color: {TEXT}; selection-background-color: {PRIMARY};
+    selection-color: white; border: 1px solid {BORDER};
+}}
+QSpinBox {{
+    border: 1px solid {BORDER}; border-radius: 6px; padding: 3px 6px;
+    background: white; color: {TEXT}; font-size: 12px;
+}}
+QMenu {{ background: white; color: {TEXT}; border: 1px solid {BORDER}; }}
+QMenu::item:selected {{ background: {PRIMARY}; color: white; }}
+QDialog, QMessageBox, QInputDialog {{ background: {CARD_BG}; }}
+QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QTabWidget::pane {{ border: 1px solid {BORDER}; border-radius: 6px; background: white; }}
 QTabBar::tab {{
     padding: 8px 20px; border: 1px solid transparent; font-size: 12px;
@@ -99,3 +119,64 @@ QScrollBar::handle:horizontal {{
 QScrollBar::handle:horizontal:hover {{ background: #94A3B8; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 """
+
+
+def apply_theme(app):
+    """固定使用本程序自己的浅色主题,不跟随 Windows 深色模式。
+
+    Qt 6 在 Windows 深色模式下会给出深色调色板:样式表没逐一指定颜色的
+    控件(标签、下拉框、数字框、滚动区域)就会变成"白底白字"或黑块,
+    看起来像文字消失。这里统一用 Fusion 风格 + 显式浅色调色板。"""
+    from PySide6.QtGui import QPalette, QColor, QFont
+    from PySide6.QtCore import Qt
+    try:
+        app.styleHints().setColorScheme(Qt.ColorScheme.Light)   # Qt ≥ 6.8
+    except Exception:
+        pass
+    app.setStyle('Fusion')
+    pal = QPalette()
+    roles = {
+        QPalette.Window: BG, QPalette.WindowText: TEXT,
+        QPalette.Base: '#FFFFFF', QPalette.AlternateBase: '#F8FAFC',
+        QPalette.Text: TEXT, QPalette.PlaceholderText: '#94A3B8',
+        QPalette.Button: CARD_BG, QPalette.ButtonText: TEXT,
+        QPalette.ToolTipBase: '#FFFFFF', QPalette.ToolTipText: TEXT,
+        QPalette.Highlight: PRIMARY, QPalette.HighlightedText: '#FFFFFF',
+        QPalette.BrightText: '#FFFFFF', QPalette.Link: PRIMARY,
+        QPalette.Light: '#FFFFFF', QPalette.Midlight: '#F1F5F9',
+        QPalette.Mid: '#CBD5E1', QPalette.Dark: '#94A3B8',
+        QPalette.Shadow: '#64748B',
+    }
+    for role, c in roles.items():
+        pal.setColor(QPalette.All, role, QColor(c))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        pal.setColor(QPalette.Disabled, role, QColor('#94A3B8'))
+    app.setPalette(pal)
+    app.setStyleSheet(QSS.replace('__ARROW__', _arrow_file()))
+    app.setFont(QFont('Microsoft YaHei UI', 10))
+
+
+def _arrow_file():
+    """下拉箭头图标:运行时画成 PNG 写到临时目录供样式表引用。
+    (PNG 是 Qt 内置格式,打包成单文件 exe 也不依赖额外插件)"""
+    import os
+    import tempfile
+    from PySide6.QtGui import QPixmap, QPainter, QPen, QColor
+    from PySide6.QtCore import Qt, QPointF
+    path = os.path.join(tempfile.gettempdir(), 'fac_combo_arrow.png')
+    try:
+        pm = QPixmap(20, 12)              # 2 倍尺寸,高分屏也清晰
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor(TEXT_SEC), 3)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.drawPolyline([QPointF(2, 2), QPointF(10, 10), QPointF(18, 2)])
+        p.end()
+        if not pm.save(path, 'PNG'):
+            return ''
+    except Exception:
+        return ''
+    return path.replace('\\', '/')

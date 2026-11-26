@@ -435,6 +435,7 @@ def run_organize(opts: OrganizeOptions, log, progress,
             reports = write_organize_report(opts.out_dir, plan, hs, tee)
             summary['reports'] = reports
             summary['scan_only'] = True
+            summary['scanned'] = len(plan)
             for r in reports:
                 tee(f'已生成体检报告: {os.path.basename(r)}')
             tee('如需真正整理,去掉「只体检」勾选后再运行一次。')

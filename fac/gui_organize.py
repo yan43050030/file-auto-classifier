@@ -226,7 +226,8 @@ class OrganizeMixin:
         hs = summary.get('health', {})
         if summary.get('scan_only'):
             lines = ['体检完成(未移动任何文件):',
-                     f'· 文件总数 {len(summary.get("stats", {})) or ""}'.rstrip(),
+                     f'· 文件总数 {summary.get("scanned", 0)} 个,'
+                     f'占用 {human_size(hs.get("total_bytes", 0))}',
                      f'· 重复文件 {hs.get("dup_extra", 0)} 个,'
                      f'删除可省出 {human_size(hs.get("dup_bytes", 0))}',
                      f'· 垃圾/临时文件 {hs.get("junk", 0)} 个,'

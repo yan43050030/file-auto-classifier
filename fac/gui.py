@@ -34,7 +34,7 @@ from .rules import Rule
 from . import config as conf
 from . import extract as ex
 
-from .gui_style import QSS, TEXT_SEC, CARD_BG, BORDER
+from .gui_style import QSS, TEXT_SEC, CARD_BG, BORDER, apply_theme  # noqa: F401
 from .gui_organize import OrganizeMixin
 from .gui_bridge import UiBridge, in_main_thread
 
@@ -986,7 +986,9 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.lbl_prog.setText('已取消' if summary.get('cancelled') else '完成')
         if summary.get('cancelled'):
             return
-        if summary.get('journal'):
+        # 文件整理(含只体检 —— 只体检不写台账,不能只凭台账判断)
+        if summary.get('journal') or summary.get('scan_only') \
+                or 'health' in summary:
             self._on_organize_done(summary)
             return
         msg = f'分类完成!共处理 {summary.get("files", 0)} 个文件。'
@@ -1035,9 +1037,7 @@ def _enable_hidpi():
 def main():
     _enable_hidpi()
     app = QApplication(sys.argv)
-    app.setStyleSheet(QSS)
-    font = QFont('Microsoft YaHei UI', 10)
-    app.setFont(font)
+    apply_theme(app)
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

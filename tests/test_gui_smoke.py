@@ -268,3 +268,25 @@ def test_classify_nested_archive_end_to_end(win, app, tmp_path, monkeypatch):
     tm.stop()
     assert list((out / '张三').rglob('张三_身份证.txt'))
     assert list((out / '李四').rglob('李四_材料.pdf'))
+
+
+def test_theme_ignores_windows_dark_mode(app):
+    """Windows 深色模式下也必须是浅色界面,否则标签/下拉框会"白底白字"看不见。"""
+    from PySide6.QtGui import QPalette, QColor
+    from fac.gui_style import apply_theme
+    old_pal, old_ss = app.palette(), app.styleSheet()
+    dark = QPalette()
+    for role in (QPalette.Window, QPalette.Base, QPalette.Button):
+        dark.setColor(role, QColor('#202020'))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        dark.setColor(role, QColor('#FFFFFF'))
+    app.setPalette(dark)                     # 模拟系统给的深色调色板
+    try:
+        apply_theme(app)
+        pal = app.palette()
+        assert pal.color(QPalette.WindowText).lightness() < 100   # 深色文字
+        assert pal.color(QPalette.Base).lightness() > 200         # 浅色底
+        assert pal.color(QPalette.Text).lightness() < 100
+    finally:
+        app.setPalette(old_pal)
+        app.setStyleSheet(old_ss)
