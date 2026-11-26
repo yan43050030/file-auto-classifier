@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 import shutil
 import tempfile
 import datetime
@@ -17,6 +18,7 @@ from .idcard import find_ids
 from .rules import Rule, match_rules
 from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
 from .company import build_company_map, CompanyMatcher
+from .emptyfile import empty_reason, BUCKET_EMPTY, DEFAULT_MAX_KB
 from . import extract as ex
 from .report import write_matrix_report
 
@@ -42,7 +44,8 @@ class JobOptions:
                  auto_pw_txt=True, pw_files=None, delete_ok=False,
                  rules=None, intelligent=True,
                  intelligent_min_freq=10, intelligent_exclude=None,
-                 auto_company=True):
+                 auto_company=True, empty_detect=False,
+                 empty_max_kb=DEFAULT_MAX_KB):
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.roster = roster
@@ -62,10 +65,15 @@ class JobOptions:
         self.intelligent_exclude = list(intelligent_exclude or [])
         # 未命中名单时按 公司名称 / 统一社会信用代码 自动归档
         self.auto_company = auto_company
+        # 小于阈值且无实质内容的反馈 → 此人目录下「疑似空值」子文件夹
+        # (界面/命令行/配置默认开启;库接口默认关闭以保持旧行为)
+        self.empty_detect = empty_detect
+        self.empty_max_kb = max(1, int(empty_max_kb or DEFAULT_MAX_KB))
 
 
 class PlanItem:
-    __slots__ = ('src', 'fname', 'unit', 'action', 'targets', 'persons', 'via')
+    __slots__ = ('src', 'fname', 'unit', 'action', 'targets', 'persons', 'via',
+                 'empty')
 
     def __init__(self, src, fname, unit, action, targets, persons=None, via=''):
         self.src = src            # 临时目录里的文件路径
@@ -75,11 +83,15 @@ class PlanItem:
         self.targets = targets    # 目标文件夹名列表
         self.persons = persons or []
         self.via = via            # 命中方式: 文件名/内容/身份证号/未分类
+        self.empty = ''           # 非空 = 疑似空值的原因(放入 目标/疑似空值/)
 
     def display_target(self):
         if self.action == 'split':
             return '拆分 → ' + '、'.join(t for t in self.targets)
         return '、'.join(self.targets)
+
+    def preview_via(self):
+        return f'{self.via} · 疑似空值({self.empty})' if self.empty else self.via
 
 
 def _collect_inputs(inputs, auto_pw_txt, log):
@@ -146,8 +158,10 @@ def run_job(opts: JobOptions, log, progress, ask_password,
     done_cb(summary)               完成回调
     """
     summary = {'stats': {}, 'matrix': {}, 'files': 0, 'failed': 0,
-               'dedup_skipped': 0, 'cancelled': False, 'reports': []}
+               'dedup_skipped': 0, 'cancelled': False, 'reports': [],
+               'empty_matrix': {}, 'empty': 0}
     stats, matrix = summary['stats'], summary['matrix']
+    empty_matrix = summary['empty_matrix']
 
     os.makedirs(opts.out_dir, exist_ok=True)
     log_path = os.path.join(
@@ -174,9 +188,11 @@ def run_job(opts: JobOptions, log, progress, ask_password,
 
     seen_hashes = {}     # (folder, sha1) -> 已放入的文件名
 
-    def place(src, fname, unit, folder, move):
-        """把 src 放入 out/folder,按 unit_mode 标注来源。返回是否实际放入。"""
-        base = os.path.join(opts.out_dir, folder)
+    def place(src, fname, unit, folder, move, sub=''):
+        """把 src 放入 out/folder[/sub],按 unit_mode 标注来源。返回是否实际放入。
+        sub 用于「疑似空值」等子文件夹;核对表仍计在 folder(此人)名下。"""
+        base = os.path.join(opts.out_dir, folder, sub) if sub else \
+            os.path.join(opts.out_dir, folder)
         name = fname
         if unit:
             if opts.unit_mode == 'subfolder':
@@ -199,7 +215,11 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             shutil.move(long_path(src), long_path(dst))
         else:
             shutil.copy2(long_path(src), long_path(dst))
-        matrix[(folder, unit or '')] = matrix.get((folder, unit or ''), 0) + 1
+        key = (folder, unit or '')
+        matrix[key] = matrix.get(key, 0) + 1
+        if sub == BUCKET_EMPTY:
+            empty_matrix[key] = empty_matrix.get(key, 0) + 1
+            summary['empty'] += 1
         stats[folder] = stats.get(folder, 0) + 1
         return True
 
@@ -397,6 +417,10 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             plan.append(PlanItem(fp, fname, unit, 'place', ['未分类'],
                                  via='未分类'))
 
+        # ---- 3.9 疑似空值:小文件且无实质内容 → 此人目录下单独子文件夹 ----
+        if opts.empty_detect:
+            _mark_empty(plan, opts, tee)
+
         # ---- 4. 预览确认(试运行) ----
         if opts.preview and confirm_cb is not None:
             tee(f'已生成归档计划(共 {len(plan)} 个文件),等待确认...')
@@ -414,9 +438,11 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 if item.action == 'split':
                     _do_split(item, opts, place, tee, tmp)
                 else:
+                    sub = BUCKET_EMPTY if item.empty else ''
                     for j, t in enumerate(item.targets):
                         last = (j == len(item.targets) - 1)
-                        place(item.src, item.fname, item.unit, t, move=last)
+                        place(item.src, item.fname, item.unit, t, move=last,
+                              sub=sub)
                 summary['files'] += 1
             except Exception as e:
                 tee(f'  [错误] 归档失败 {item.fname}: {e}')
@@ -431,11 +457,15 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 f'已放入「解压失败」文件夹。')
         if summary['dedup_skipped']:
             tee(f'按内容去重跳过 {summary["dedup_skipped"]} 个重复文件。')
+        if summary['empty']:
+            tee(f'疑似空值 {summary["empty"]} 个(小于 {opts.empty_max_kb} KB 且无实质'
+                f'内容),已放入各人目录下的「{BUCKET_EMPTY}」,需要时可进去核对。')
         tee('各文件夹文件数:')
         for k in sorted(stats):
             tee(f'  {k} : {stats[k]} 个')
 
-        reports = write_matrix_report(opts.out_dir, matrix, tee)
+        reports = write_matrix_report(opts.out_dir, matrix, tee,
+                                      empty=empty_matrix)
         summary['reports'] = reports
         for r in reports:
             tee(f'已生成反馈核对表: {os.path.basename(r)}')
@@ -465,6 +495,34 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 pass
         if done_cb:
             done_cb(summary)
+
+
+def _mark_empty(plan, opts: JobOptions, tee):
+    """给归到人员/企业名下的小文件做"疑似空值"判定(未分类的不动)。"""
+    max_bytes = opts.empty_max_kb * 1024
+    n = 0
+    for item in plan:
+        if item.action != 'place' or item.targets == ['未分类']:
+            continue
+        try:
+            size = os.path.getsize(long_path(item.src))
+        except OSError:
+            continue
+        if size > max_bytes:
+            continue
+        # 被查询对象的姓名/证号:表格里只出现这些不算"有内容"
+        kws = []
+        for p in item.persons or []:
+            kws.extend(p.keywords())
+        for t in item.targets:
+            kws.extend(x for x in re.split(r'[_\\/]', t) if len(x) >= 2)
+        reason = empty_reason(item.src, size, max_bytes, kws)
+        if reason:
+            item.empty = reason
+            n += 1
+    if n:
+        tee(f'[疑似空值] {n} 个小文件(≤{opts.empty_max_kb} KB)看起来没有实质内容,'
+            f'将放入此人目录下的「{BUCKET_EMPTY}」子文件夹。')
 
 
 def _do_split(item: PlanItem, opts: JobOptions, place, tee, tmp):

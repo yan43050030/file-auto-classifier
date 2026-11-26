@@ -48,6 +48,11 @@ def build_parser():
                    help='关闭"按文件名中的身份证号自动分类"')
     p.add_argument('--no-auto-company', action='store_true',
                    help='关闭"按公司名称/统一社会信用代码自动分类"')
+    p.add_argument('--no-empty-detect', action='store_true',
+                   help='关闭"疑似空值":默认把小于阈值且无实质内容的反馈'
+                        '放入此人目录下的「疑似空值」')
+    p.add_argument('--empty-kb', type=int, default=10, metavar='KB',
+                   help='疑似空值的大小阈值(KB),默认 10')
     p.add_argument('--unit-mode', choices=['subfolder', 'prefix', 'none'],
                    default='subfolder',
                    help='来源单位标注方式:subfolder=人员文件夹下按单位建子文件夹(默认),'
@@ -243,6 +248,7 @@ def main(argv=None):
         inputs=args.input, out_dir=args.out, roster=roster,
         copy_to_each=args.each, auto_id=not args.no_auto_id,
         auto_company=not args.no_auto_company,
+        empty_detect=not args.no_empty_detect, empty_max_kb=args.empty_kb,
         unit_mode=args.unit_mode,
         content_match=args.content_match, split_excel=args.split_excel,
         dedup=args.dedup,

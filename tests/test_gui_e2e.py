@@ -95,7 +95,9 @@ def test_all_features_through_main_window(app, tmp_path, monkeypatch):
     check('拖拽添加文件夹', w.inputs == [src])
     w.txt_out.setText(out)
     w.txt_roster.setPlainText(f'张三,,小张\n王五\n张三丰\n李四,{ID_Z}')
-    for k, v in dict(preview=True, content_match=True, split_excel=True, auto_pw_txt=True,
+    # 本用例的样例文件都只有几个字节,关掉疑似空值以检查常规归档路径
+    # (疑似空值另有 tests/test_emptyfile.py 专门覆盖)
+    for k, v in dict(empty_detect=False, preview=True, content_match=True, split_excel=True, auto_pw_txt=True,
                      intelligent=False, dedup=False, delete_ok=False, auto_id=True).items():
         w._ck[k].setChecked(v)
     n = len(msgs); w._start(); m = wait_done(n)

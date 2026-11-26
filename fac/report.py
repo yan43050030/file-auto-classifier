@@ -8,9 +8,24 @@ import datetime
 from .util import unique_path
 
 
-def write_matrix_report(out_dir: str, matrix: dict, log):
+def write_matrix_report(out_dir: str, matrix: dict, log, empty=None):
     """matrix: {(folder, unit): count}。生成 CSV(Excel 可直接打开);
-    装了 openpyxl 时同时生成 xlsx。返回生成的文件路径列表。"""
+    装了 openpyxl 时同时生成 xlsx。返回生成的文件路径列表。
+
+    empty: {(folder, unit): 疑似空值个数}。格子里全是疑似空值时写「疑似空」
+    (= 单位已反馈但无信息,区别于空白 = 未反馈);部分是时写「3(空2)」。"""
+    empty = empty or {}
+
+    def cell(f, u):
+        n = matrix.get((f, u), 0)
+        e = empty.get((f, u), 0)
+        if not n:
+            return ''
+        if e and e >= n:
+            return '疑似空'
+        if e:
+            return f'{n}(空{e})'
+        return n
     if not matrix:
         return []
     units = sorted({u for (_f, u) in matrix})
@@ -25,7 +40,7 @@ def write_matrix_report(out_dir: str, matrix: dict, log):
     rows = []
     for f in folders:
         counts = [matrix.get((f, u), 0) for u in units]
-        rows.append([f] + [c if c else '' for c in counts] + [sum(counts)])
+        rows.append([f] + [cell(f, u) for u in units] + [sum(counts)])
     total_row = ['合计'] + \
         [sum(matrix.get((f, u), 0) for f in folders) for u in units] + \
         [sum(matrix.values())]
@@ -49,16 +64,25 @@ def write_matrix_report(out_dir: str, matrix: dict, log):
         for c in ws[1]:
             c.font = Font(bold=True)
         miss_fill = PatternFill('solid', fgColor='FFF2CC')   # 空格标黄提醒
+        empty_fill = PatternFill('solid', fgColor='E2E8F0')  # 疑似空值标灰
         for r in rows:
             ws.append(r)
             row_idx = ws.max_row
             for col in range(2, 2 + len(units)):
-                if ws.cell(row=row_idx, column=col).value in ('', None):
+                v = ws.cell(row=row_idx, column=col).value
+                if v in ('', None):
                     ws.cell(row=row_idx, column=col).fill = miss_fill
+                elif v == '疑似空':
+                    ws.cell(row=row_idx, column=col).fill = empty_fill
         ws.append(total_row)
         for c in ws[ws.max_row]:
             c.font = Font(bold=True)
         ws.column_dimensions['A'].width = 22
+        if empty:
+            ws.append([])
+            ws.append(['说明:空白(黄)= 该单位未反馈此人;「疑似空」(灰)= 已反馈但文件很小、'
+                       '看起来无信息(文件在此人目录的「疑似空值」里);'
+                       '「3(空2)」= 共 3 个文件,其中 2 个疑似空值。'])
         xlsx_path = unique_path(out_dir, '反馈核对表.xlsx')
         wb.save(xlsx_path)
         written.append(xlsx_path)

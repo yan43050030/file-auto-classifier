@@ -361,6 +361,26 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.txt_iexclude.setPlaceholderText('逗号分隔,如:某某专案,某某工程(常见机构/地名已内置排除)')
         ir.addWidget(self.txt_iexclude, 1)
         al.addLayout(ir)
+
+        # 疑似空值:查无账户等的小反馈文件单独放,看材料时可先跳过
+        er = QHBoxLayout(); er.setSpacing(6)
+        cb = QCheckBox('疑似空值:小于')
+        cb.setChecked(True)
+        self._ck['empty_detect'] = cb
+        er.addWidget(cb)
+        self.spin_emptykb = QSpinBox()
+        self.spin_emptykb.setRange(1, 1024)
+        self.spin_emptykb.setValue(10)
+        self.spin_emptykb.setSuffix(' KB')
+        self.spin_emptykb.setFixedWidth(84)
+        er.addWidget(self.spin_emptykb)
+        lbl = QLabel('且无实质内容的反馈(只有表头、"查无记录"等),'
+                     '放入此人目录下的「疑似空值」子文件夹')
+        lbl.setWordWrap(True)
+        er.addWidget(lbl, 1)
+        cb.setToolTip('有实质数据行的小表格(如只有一两条账户记录)仍放在正常目录,不会被藏起来。\n'
+                      '反馈核对表里,全部为疑似空值的格子显示「疑似空」(灰色)。')
+        al.addLayout(er)
         al.addWidget(self._sep())
 
         al.addWidget(QLabel('高级分类规则(名单/智能未命中时按规则从上到下依次匹配):'))
@@ -698,6 +718,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             'rules': [r.to_dict() for r in self._get_rules()],
             'intelligent_min_freq': self.spin_minfreq.value(),
             'intelligent_exclude': self.txt_iexclude.text().strip(),
+            'empty_max_kb': self.spin_emptykb.value(),
             'work_mode': self._mode(),
             'org_layout': self.cmb_layout.currentText().split('—')[0].strip(),
             'org_op_mode': 'copy' if self._rg_op.checkedId() == 1 else 'move',
@@ -724,6 +745,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             self._rg_unit.button(2).setChecked(um == 'none')
             self.txt_pwfile.setText(cfg.get('pw_file', ''))
             self.spin_minfreq.setValue(int(cfg.get('intelligent_min_freq', 10)))
+            self.spin_emptykb.setValue(int(cfg.get('empty_max_kb', 10)))
             self.txt_iexclude.setText(str(cfg.get('intelligent_exclude', '')))
             mode = cfg.get('work_mode', 'person')
             self.cmb_mode.setCurrentIndex(1 if mode == 'organize' else 0)
@@ -838,7 +860,9 @@ class MainWindow(OrganizeMixin, QMainWindow):
             rows = []       # (QTreeWidgetItem, PlanItem)
             for item in plan:
                 it = QTreeWidgetItem(tree, [item.fname, item.unit,
-                                            item.display_target(), item.via])
+                                            item.display_target(),
+                                            getattr(item, 'preview_via',
+                                                    lambda: item.via)()])
                 if item.action == 'place':      # 拆分行不支持手改
                     it.setFlags(it.flags() | Qt.ItemIsEditable)
                 rows.append((it, item))
@@ -986,6 +1010,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             pw_files=pw_files,
             rules=self._get_rules(),
             intelligent_min_freq=self.spin_minfreq.value(),
+            empty_max_kb=self.spin_emptykb.value(),
             intelligent_exclude=[t for t in re.split(
                 r'[,，;；\s]+', self.txt_iexclude.text()) if t.strip()],
             **{k: cb.isChecked() for k, cb in self._ck.items()})

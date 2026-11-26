@@ -327,3 +327,13 @@ def test_output_dir_not_reset_after_job_or_same_mode(win, tmp_path):
     assert win.txt_out.text() == str(tmp_path / 'chosen')
     win.cmb_mode.setCurrentIndex(1)                 # 真切换模式 → 跟随并改名
     assert '整理结果_' in win.txt_out.text()
+
+
+def test_empty_detect_option_roundtrip(win):
+    assert win._ck['empty_detect'].isChecked()
+    win.spin_emptykb.setValue(8)
+    cfg = win._gather_cfg()
+    assert cfg['empty_detect'] is True and cfg['empty_max_kb'] == 8
+    win.spin_emptykb.setValue(10)
+    win._apply_cfg(cfg)
+    assert win.spin_emptykb.value() == 8

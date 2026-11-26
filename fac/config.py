@@ -13,7 +13,9 @@ DEFAULTS = {
     'roster_text': '',
     'multi_hit': 'first',        # first | each
     'auto_id': True,
-    'auto_company': True,        # 按公司名称/统一社会信用代码自动归档
+    'auto_company': True,
+    'empty_detect': True,        # 小且无实质内容的反馈 → 此人目录/疑似空值
+    'empty_max_kb': 10,        # 按公司名称/统一社会信用代码自动归档
     'unit_mode': 'subfolder',    # subfolder | prefix | none
     'preview': False,
     'content_match': False,

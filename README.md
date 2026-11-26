@@ -26,6 +26,7 @@
 - **内容匹配(可选)**:文件名未命中时,读取 Excel / Word / PDF / 文本内容查找名单中的人;支持旧版 .doc / .xls(Office 97-2003);智能识别与身份证号兜底同样作用于内容。
 - **Excel 按人拆分(可选)**:一个表里有多个人的行时,按行拆成每人一份,原表保留在"原始反馈"。
 - **内容去重(可选)**:同一人员文件夹内,多个单位反馈的相同文件只留一份。
+- **疑似空值**:"查无账户"之类的小反馈(默认 ≤10 KB,可调)放入此人目录下的「疑似空值」子文件夹,看材料时先跳过、需要时再核对;判定会看内容(只有表头 / 只写了"无" / 正文"查无记录"),有真实记录的小表格照常归档;核对表中以「疑似空」(灰)标出,与"未反馈"(黄)区分。
 
 ### 文件整理
 - **保护代码/工程目录**:含 `.git`、`package.json`、`requirements.txt`、`pom.xml`、`*.sln` 等标志的目录**整体搬运不打散**,内部结构与隐藏文件原样保留 —— 否则一个代码项目会被按类型拆碎而彻底废掉。
@@ -82,7 +83,7 @@ python 文件自动分类工具.py -i a.zip b.rar -o out --kw 张三 --kw "李�
 ```bash
 pip install pyinstaller -r requirements.txt
 
-pyinstaller --onefile --windowed --name 文件自动分类工具V4.4 ^
+pyinstaller --onefile --windowed --name 文件自动分类工具V4.5 ^
   --icon app.ico --add-data "app.ico;." --add-binary "UnRAR.exe;." ^
   --collect-submodules py7zr --collect-submodules rarfile --collect-submodules pyzipper ^
   --collect-submodules send2trash --collect-submodules openpyxl ^
@@ -91,7 +92,7 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V4.4 ^
   文件自动分类工具.py
 ```
 
-生成的 `dist/文件自动分类工具V4.4.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
+生成的 `dist/文件自动分类工具V4.5.exe` 拷到任意 Windows 电脑双击即用,无需安装 Python 或 WinRAR。
 (如不需要 Word/PDF 内容匹配,可不装 python-docx / pdfplumber,体积更小。)
 
 > 每次发版由 GitHub Actions 在 Windows 环境自动跑完测试后打包,
@@ -106,6 +107,7 @@ pyinstaller --onefile --windowed --name 文件自动分类工具V4.4 ^
 | `fac/roster.py` | 人员名单(多标识合并、最长匹配、Excel 导入) |
 | `fac/pipeline.py` | 主流程调度(预览 / 进度 / 取消 / 去重 / 单位标注) |
 | `fac/idcard.py` | 身份证号校验(18 位校验位 / 15 位 / 互转) |
+| `fac/emptyfile.py` | 疑似空值反馈识别(小文件 + 表格无数据行 / 正文"查无记录") |
 | `fac/company.py` | 企业识别(统一社会信用代码校验 / 公司名称提取 / 名称↔代码关联) |
 | `fac/password.py` | 密码管理与密码本解析 |
 | `fac/content_match.py` | Excel/Word/PDF/文本 内容匹配 |
