@@ -8,6 +8,18 @@ import datetime
 from .util import unique_path
 
 
+def _fixed_path(out_dir, name):
+    """核对表是累计的,每次覆盖同一个文件;文件正被 Excel 打开(锁定)时另存一份。"""
+    p = os.path.join(out_dir, name)
+    if os.path.exists(p):
+        try:
+            with open(p, 'a'):
+                pass
+        except OSError:
+            return unique_path(out_dir, name)
+    return p
+
+
 def write_matrix_report(out_dir: str, matrix: dict, log, empty=None):
     """matrix: {(folder, unit): count}。生成 CSV(Excel 可直接打开);
     装了 openpyxl 时同时生成 xlsx。返回生成的文件路径列表。
@@ -46,7 +58,7 @@ def write_matrix_report(out_dir: str, matrix: dict, log, empty=None):
         [sum(matrix.values())]
 
     written = []
-    csv_path = unique_path(out_dir, '反馈核对表.csv')
+    csv_path = _fixed_path(out_dir, '反馈核对表.csv')
     with open(csv_path, 'w', newline='', encoding='utf-8-sig') as fp:
         w = csv.writer(fp)
         w.writerow(header)
@@ -83,7 +95,7 @@ def write_matrix_report(out_dir: str, matrix: dict, log, empty=None):
             ws.append(['说明:空白(黄)= 该单位未反馈此人;「疑似空」(灰)= 已反馈但文件很小、'
                        '看起来无信息(文件在此人目录的「疑似空值」里);'
                        '「3(空2)」= 共 3 个文件,其中 2 个疑似空值。'])
-        xlsx_path = unique_path(out_dir, '反馈核对表.xlsx')
+        xlsx_path = _fixed_path(out_dir, '反馈核对表.xlsx')
         wb.save(xlsx_path)
         written.append(xlsx_path)
     except ImportError:

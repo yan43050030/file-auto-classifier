@@ -273,6 +273,13 @@ class MainWindow(OrganizeMixin, QMainWindow):
         b = QPushButton('浏览'); b.setFixedHeight(32); b.clicked.connect(self._choose_out)
         r.addWidget(b)
         lay.addLayout(r)
+        self.ck_out_fixed = QCheckBox('固定此目录为归档库(以后的新反馈都合并到这里)')
+        self.ck_out_fixed.setToolTip(
+            '勾选后,输出目录不再跟随压缩包位置,重启也记住。\n'
+            '新反馈导入时:同一人/企业并入原文件夹,已导入过的相同文件自动跳过,\n'
+            '反馈核对表按历次导入累计。')
+        self.ck_out_fixed.toggled.connect(self._on_out_fixed)
+        lay.addWidget(self.ck_out_fixed)
         lay.addStretch()
         return gb
 
@@ -317,11 +324,17 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self._rb_multi.addButton(r2, 1)
         ol.addWidget(r2)
         ol.addWidget(self._sep())
-        ol.addWidget(QLabel('来源单位标注(单位=压缩包名):'))
+        ol.addWidget(QLabel('人员/企业文件夹里怎么放(单位=压缩包名):'))
         self._rg_unit = QButtonGroup(self)
-        u1 = QRadioButton('按单位建子文件夹(推荐)'); u1.setChecked(True)
+        u0 = QRadioButton('按资料类型分:疑似空值 / 银行流水 / 其他数据,'
+                          '文件名加【单位】前缀(推荐)')
+        u0.setChecked(True)
+        u0.setToolTip('同一人/企业不管来自几个压缩包、几次反馈,都在一个文件夹里;\n'
+                      '来源单位写在文件名前面,如【建设银行】张三_流水.xlsx')
+        self._rg_unit.addButton(u0, 3); ol.addWidget(u0)
+        u1 = QRadioButton('按单位建子文件夹(旧方式)')
         self._rg_unit.addButton(u1, 0); ol.addWidget(u1)
-        u2 = QRadioButton('文件名加【单位】前缀')
+        u2 = QRadioButton('文件名加【单位】前缀,不分子文件夹')
         self._rg_unit.addButton(u2, 1); ol.addWidget(u2)
         u3 = QRadioButton('不标注来源')
         self._rg_unit.addButton(u3, 2); ol.addWidget(u3)
@@ -540,9 +553,23 @@ class MainWindow(OrganizeMixin, QMainWindow):
             return
         last = self.inputs[-1]
         base = last if os.path.isdir(last) else os.path.dirname(last)
-        kind = '整理结果' if self._mode() == 'organize' else '分类结果'
-        self.txt_out.setText(os.path.join(
-            base, f'{kind}_{datetime.datetime.now():%Y%m%d}'))
+        # 按人归档不带日期:同一收件目录里后续的反馈会自动合并到同一个结果目录
+        if self._mode() == 'organize':
+            name = f'整理结果_{datetime.datetime.now():%Y%m%d}'
+        else:
+            name = '分类结果'
+        self.txt_out.setText(os.path.join(base, name))
+
+    def _on_out_fixed(self, on):
+        # 勾上:固定不动;取消:恢复跟随最后添加的压缩包
+        self._out_manual = bool(on)
+        if not on:
+            self._auto_out()
+
+    _UNIT_MODES = {3: 'category', 0: 'subfolder', 1: 'prefix', 2: 'none'}
+
+    def _unit_mode(self):
+        return self._UNIT_MODES.get(self._rg_unit.checkedId(), 'category')
 
     def _add_archives(self):
         fs, _ = QFileDialog.getOpenFileNames(
@@ -713,7 +740,9 @@ class MainWindow(OrganizeMixin, QMainWindow):
             'out_dir': self.txt_out.text().strip(),
             'roster_text': self.txt_roster.toPlainText().rstrip('\n'),
             'multi_hit': 'first' if self._rb_multi.checkedId() == 0 else 'each',
-            'unit_mode': ['subfolder', 'prefix', 'none'][self._rg_unit.checkedId()],
+            'unit_mode': self._unit_mode(),
+            'out_fixed': self.ck_out_fixed.isChecked(),
+            'layout_v46': True,
             'pw_file': self.txt_pwfile.text().strip(),
             'rules': [r.to_dict() for r in self._get_rules()],
             'intelligent_min_freq': self.spin_minfreq.value(),
@@ -739,10 +768,11 @@ class MainWindow(OrganizeMixin, QMainWindow):
                 self.txt_roster.setPlainText(cfg['roster_text'] + '\n')
             self._rb_multi.button(0).setChecked(cfg.get('multi_hit','first')=='first')
             self._rb_multi.button(1).setChecked(cfg.get('multi_hit','first')=='each')
-            um = cfg.get('unit_mode', 'subfolder')
-            self._rg_unit.button(0).setChecked(um == 'subfolder')
-            self._rg_unit.button(1).setChecked(um == 'prefix')
-            self._rg_unit.button(2).setChecked(um == 'none')
+            um = cfg.get('unit_mode', 'category')
+            bid = {v: k for k, v in self._UNIT_MODES.items()}.get(um, 3)
+            self._rg_unit.button(bid).setChecked(True)
+            self.ck_out_fixed.setChecked(bool(cfg.get('out_fixed', False)))
+            self._out_manual = self.ck_out_fixed.isChecked()
             self.txt_pwfile.setText(cfg.get('pw_file', ''))
             self.spin_minfreq.setValue(int(cfg.get('intelligent_min_freq', 10)))
             self.spin_emptykb.setValue(int(cfg.get('empty_max_kb', 10)))
@@ -1006,7 +1036,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
         opts = JobOptions(
             inputs=list(self.inputs), out_dir=out, roster=roster,
             copy_to_each=(self._rb_multi.checkedId() == 1),
-            unit_mode=['subfolder','prefix','none'][self._rg_unit.checkedId()],
+            unit_mode=self._unit_mode(),
             pw_files=pw_files,
             rules=self._get_rules(),
             intelligent_min_freq=self.spin_minfreq.value(),

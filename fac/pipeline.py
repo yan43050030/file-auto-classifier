@@ -19,6 +19,8 @@ from .rules import Rule, match_rules
 from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
 from .company import build_company_map, CompanyMatcher
 from .emptyfile import empty_reason, BUCKET_EMPTY, DEFAULT_MAX_KB
+from .doctype import detect_category
+from .library import Library, SPECIAL_FOLDERS
 from . import extract as ex
 from .report import write_matrix_report
 
@@ -38,7 +40,7 @@ class JobOptions:
 
     def __init__(self, inputs, out_dir, roster,
                  copy_to_each=False, auto_id=True,
-                 unit_mode='subfolder',          # subfolder | prefix | none
+                 unit_mode='subfolder',          # category | subfolder | prefix | none
                  preview=False,
                  content_match=False, split_excel=False, dedup=False,
                  auto_pw_txt=True, pw_files=None, delete_ok=False,
@@ -73,7 +75,7 @@ class JobOptions:
 
 class PlanItem:
     __slots__ = ('src', 'fname', 'unit', 'action', 'targets', 'persons', 'via',
-                 'empty')
+                 'empty', 'category')
 
     def __init__(self, src, fname, unit, action, targets, persons=None, via=''):
         self.src = src            # 临时目录里的文件路径
@@ -84,6 +86,7 @@ class PlanItem:
         self.persons = persons or []
         self.via = via            # 命中方式: 文件名/内容/身份证号/未分类
         self.empty = ''           # 非空 = 疑似空值的原因(放入 目标/疑似空值/)
+        self.category = ''        # 资料类型(银行流水/其他数据),unit_mode=category 时用
 
     def display_target(self):
         if self.action == 'split':
@@ -91,7 +94,11 @@ class PlanItem:
         return '、'.join(self.targets)
 
     def preview_via(self):
-        return f'{self.via} · 疑似空值({self.empty})' if self.empty else self.via
+        if self.empty:
+            return f'{self.via} · 疑似空值({self.empty})'
+        if self.category:
+            return f'{self.via} · {self.category}'
+        return self.via
 
 
 def _collect_inputs(inputs, auto_pw_txt, log):
@@ -159,7 +166,8 @@ def run_job(opts: JobOptions, log, progress, ask_password,
     """
     summary = {'stats': {}, 'matrix': {}, 'files': 0, 'failed': 0,
                'dedup_skipped': 0, 'cancelled': False, 'reports': [],
-               'empty_matrix': {}, 'empty': 0}
+               'empty_matrix': {}, 'empty': 0, 'reimport_skipped': 0,
+               'merged_into': 0}
     stats, matrix = summary['stats'], summary['matrix']
     empty_matrix = summary['empty_matrix']
 
@@ -187,18 +195,43 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             raise Cancelled
 
     seen_hashes = {}     # (folder, sha1) -> 已放入的文件名
+    # 归档库:输出目录里已有的人员/企业文件夹 + 历次归档记录(支持反复导入新反馈)
+    lib = Library(opts.out_dir, log=tee)
 
-    def place(src, fname, unit, folder, move, sub=''):
-        """把 src 放入 out/folder[/sub],按 unit_mode 标注来源。返回是否实际放入。
-        sub 用于「疑似空值」等子文件夹;核对表仍计在 folder(此人)名下。"""
-        base = os.path.join(opts.out_dir, folder, sub) if sub else \
-            os.path.join(opts.out_dir, folder)
+    def place(src, fname, unit, folder, move, sub='', category=''):
+        """把 src 放入 out/folder[/…],按 unit_mode 组织。返回是否实际放入。
+
+        unit_mode=category:  人员/企业/【疑似空值|银行流水|其他数据】/【单位】文件名
+        unit_mode=subfolder: 人员/[疑似空值/]单位/文件名(旧方式)
+        核对表始终计在 folder(此人)名下。"""
+        folder = lib.resolve(folder)
         name = fname
-        if unit:
-            if opts.unit_mode == 'subfolder':
-                base = os.path.join(base, safe_folder_name(unit))
-            elif opts.unit_mode == 'prefix':
+        cat = ''
+        if opts.unit_mode == 'category':
+            if folder in SPECIAL_FOLDERS:
+                base = os.path.join(opts.out_dir, folder)
+            else:
+                cat = sub or category or detect_category(src, fname)
+                base = os.path.join(opts.out_dir, folder, cat)
+            if unit:
                 name = f'【{unit}】{fname}'
+        else:
+            base = os.path.join(opts.out_dir, folder, sub) if sub else \
+                os.path.join(opts.out_dir, folder)
+            cat = sub
+            if unit:
+                if opts.unit_mode == 'subfolder':
+                    base = os.path.join(base, safe_folder_name(unit))
+                elif opts.unit_mode == 'prefix':
+                    name = f'【{unit}】{fname}'
+        # 重复导入:同一单位、同名、同内容的文件已经在归档库里 → 跳过
+        dup, digest = lib.already_imported(folder, unit or '', fname, src,
+                                           os.path.join(base, name))
+        if dup:
+            summary['reimport_skipped'] += 1
+            if summary['reimport_skipped'] <= 20:
+                tee(f'  [已导入过] {fname} 跳过(同一单位的相同文件已在「{folder}」)')
+            return False
         if opts.dedup:
             try:
                 key = (folder, sha1_of(src))
@@ -215,6 +248,8 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             shutil.move(long_path(src), long_path(dst))
         else:
             shutil.copy2(long_path(src), long_path(dst))
+        lib.record(folder, unit or '', fname, digest, cat, sub == BUCKET_EMPTY,
+                   os.path.relpath(dst, opts.out_dir))
         key = (folder, unit or '')
         matrix[key] = matrix.get(key, 0) + 1
         if sub == BUCKET_EMPTY:
@@ -421,6 +456,21 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         if opts.empty_detect:
             _mark_empty(plan, opts, tee)
 
+        # ---- 3.95 资料类型 + 对齐归档库里已有的文件夹 ----
+        if lib.has_existing:
+            tee(f'输出目录里已有 {len(lib.existing)} 个人员/企业文件夹:'
+                f'本次结果将合并进去(同一人/企业并入原文件夹,已导入过的相同文件自动跳过)。')
+        for item in plan:
+            if item.action != 'place':
+                continue
+            before = list(item.targets)
+            item.targets = [lib.resolve(t) for t in item.targets]
+            if item.targets != before:
+                summary['merged_into'] += 1
+            if opts.unit_mode == 'category' and not item.empty and \
+                    not all(t in SPECIAL_FOLDERS for t in item.targets):
+                item.category = detect_category(item.src, item.fname)
+
         # ---- 4. 预览确认(试运行) ----
         if opts.preview and confirm_cb is not None:
             tee(f'已生成归档计划(共 {len(plan)} 个文件),等待确认...')
@@ -431,6 +481,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
 
         # ---- 5. 执行归档 ----
         tee('开始归档文件...')
+        lib.apply_renames()
         for i, item in enumerate(plan, 1):
             ck()
             progress('place', i, len(plan))
@@ -442,7 +493,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                     for j, t in enumerate(item.targets):
                         last = (j == len(item.targets) - 1)
                         place(item.src, item.fname, item.unit, t, move=last,
-                              sub=sub)
+                              sub=sub, category=item.category)
                 summary['files'] += 1
             except Exception as e:
                 tee(f'  [错误] 归档失败 {item.fname}: {e}')
@@ -457,6 +508,9 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 f'已放入「解压失败」文件夹。')
         if summary['dedup_skipped']:
             tee(f'按内容去重跳过 {summary["dedup_skipped"]} 个重复文件。')
+        if summary['reimport_skipped']:
+            tee(f'有 {summary["reimport_skipped"]} 个文件之前已导入过(同一单位的相同文件),'
+                f'本次跳过,未重复存放。')
         if summary['empty']:
             tee(f'疑似空值 {summary["empty"]} 个(小于 {opts.empty_max_kb} KB 且无实质'
                 f'内容),已放入各人目录下的「{BUCKET_EMPTY}」,需要时可进去核对。')
@@ -464,8 +518,10 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         for k in sorted(stats):
             tee(f'  {k} : {stats[k]} 个')
 
-        reports = write_matrix_report(opts.out_dir, matrix, tee,
-                                      empty=empty_matrix)
+        # 核对表按归档记录累计:历次导入的反馈都在一张表里
+        cum, cum_empty = lib.cumulative_matrix()
+        reports = write_matrix_report(opts.out_dir, cum or matrix, tee,
+                                      empty=cum_empty if cum else empty_matrix)
         summary['reports'] = reports
         for r in reports:
             tee(f'已生成反馈核对表: {os.path.basename(r)}')

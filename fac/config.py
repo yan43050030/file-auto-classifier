@@ -16,7 +16,9 @@ DEFAULTS = {
     'auto_company': True,
     'empty_detect': True,        # 小且无实质内容的反馈 → 此人目录/疑似空值
     'empty_max_kb': 10,        # 按公司名称/统一社会信用代码自动归档
-    'unit_mode': 'subfolder',    # subfolder | prefix | none
+    'unit_mode': 'category',     # category | subfolder | prefix | none
+    'out_fixed': False,          # 输出目录固定为归档库
+    'layout_v46': True,          # 已完成 V4.6 布局迁移的标记
     'preview': False,
     'content_match': False,
     'split_excel': False,
@@ -57,6 +59,9 @@ def load_config() -> dict:
             for k in DEFAULTS:
                 if k in saved:
                     cfg[k] = saved[k]
+            # V4.6 起推荐「按资料类型分」;老配置里的旧默认值迁移一次
+            if 'layout_v46' not in saved and saved.get('unit_mode') == 'subfolder':
+                cfg['unit_mode'] = 'category'
     except Exception:
         pass
     return cfg

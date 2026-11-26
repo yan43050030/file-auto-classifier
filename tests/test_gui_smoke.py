@@ -266,8 +266,8 @@ def test_classify_nested_archive_end_to_end(win, app, tmp_path, monkeypatch):
     win._start()
     assert _pump(app, lambda: bool(done), timeout=30)
     tm.stop()
-    assert list((out / '张三').rglob('张三_身份证.txt'))
-    assert list((out / '李四').rglob('李四_材料.pdf'))
+    assert list((out / '张三').rglob('*张三_身份证.txt'))
+    assert list((out / '李四').rglob('*李四_材料.pdf'))
 
 
 def test_theme_ignores_windows_dark_mode(app):
@@ -298,9 +298,9 @@ def test_output_dir_follows_last_added_archive(win, tmp_path):
     win.txt_out.setText('/old/saved/dir')          # 上次保存的配置,不算手动
     win._out_manual = False
     win._add_input(str(a / '1.zip'))
-    assert win.txt_out.text().startswith(os.path.join(str(a), '分类结果_'))
+    assert win.txt_out.text().startswith(os.path.join(str(a), '分类结果'))
     win._add_input(str(b / '2.zip'))                # 跟随最后添加的
-    assert win.txt_out.text().startswith(os.path.join(str(b), '分类结果_'))
+    assert win.txt_out.text().startswith(os.path.join(str(b), '分类结果'))
 
 
 def test_output_dir_kept_after_manual_edit(win, tmp_path):
@@ -337,3 +337,35 @@ def test_empty_detect_option_roundtrip(win):
     win.spin_emptykb.setValue(10)
     win._apply_cfg(cfg)
     assert win.spin_emptykb.value() == 8
+
+
+def test_out_fixed_keeps_library_dir(win, tmp_path):
+    a = tmp_path / 'A'; a.mkdir(); (a / '1.zip').write_bytes(b'PK')
+    win.txt_out.setText(str(tmp_path / '归档库'))
+    win.ck_out_fixed.setChecked(True)
+    win._add_input(str(a / '1.zip'))
+    assert win.txt_out.text() == str(tmp_path / '归档库')       # 固定不动
+    assert win._gather_cfg()['out_fixed'] is True
+    win.ck_out_fixed.setChecked(False)                          # 取消 → 恢复跟随
+    assert win.txt_out.text() == os.path.join(str(a), '分类结果')
+
+
+def test_default_layout_is_category(win):
+    assert win._unit_mode() == 'category'
+    cfg = win._gather_cfg()
+    assert cfg['unit_mode'] == 'category'
+    cfg['unit_mode'] = 'subfolder'
+    win._apply_cfg(cfg)
+    assert win._unit_mode() == 'subfolder'
+
+
+def test_old_config_migrates_to_category(tmp_path, monkeypatch):
+    import json
+    from fac import config as conf
+    p = tmp_path / 'old.json'
+    p.write_text(json.dumps({'unit_mode': 'subfolder'}), encoding='utf-8')
+    monkeypatch.setattr(conf, 'CONF_FILE', str(p))
+    assert conf.load_config()['unit_mode'] == 'category'
+    p.write_text(json.dumps({'unit_mode': 'subfolder', 'layout_v46': True}),
+                 encoding='utf-8')                  # 迁移后用户又选回旧方式 → 尊重
+    assert conf.load_config()['unit_mode'] == 'subfolder'

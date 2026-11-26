@@ -111,7 +111,10 @@ def test_all_features_through_main_window(app, tmp_path, monkeypatch):
     check('内容匹配:回执001 → 张三丰', has('张三丰', '回执001'))
     check('7z 解压 + Word 内容匹配 → 王五', has('王五', '说明'))
     check('Excel 按人拆分', has('张三', '查询结果') and has('王五', '查询结果'))
-    check('来源单位子文件夹', os.path.isdir(os.path.join(out, '张三', '单位A')))
+    check('按资料类型分 + 【单位】前缀',
+              os.path.isfile(os.path.join(out, '张三', '其他数据', '【单位A】张三_银行流水.txt'))
+              or any(f.startswith('【单位A】') for f in os.listdir(os.path.join(out, '张三', '其他数据'))))
+    check('文件名含流水 → 张三/银行流水', any(f.endswith('张三_银行流水.txt') for f in os.listdir(os.path.join(out, '张三', '银行流水'))))
     check('反馈核对表 xlsx', os.path.exists(os.path.join(out, '反馈核对表.xlsx')))
     check('日志文件写入输出目录', any(f.startswith('分类日志_') for f in os.listdir(out)))
     check('界面日志有内容', '分类完成' in w.log.toPlainText())
@@ -163,4 +166,4 @@ def test_all_features_through_main_window(app, tmp_path, monkeypatch):
     tm.stop()
     bad = [f'{n} {d}' for n, ok, d in results if not ok]
     assert not bad, '未通过: ' + '; '.join(bad)
-    assert len(results) == 26
+    assert len(results) == 27
