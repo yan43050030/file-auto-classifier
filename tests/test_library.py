@@ -347,7 +347,9 @@ def test_sync_updates_moves_renames_edits_and_deletes(tmp_path):
     (a / '其他数据' / '我自己放的.txt').write_text('x', encoding='utf-8')        # 手动新增
     lib = Library(str(out))
     st = lib.sync()
+    folders = st.pop('folders')
     assert st == {'moved': 3, 'gone': 1, 'unregistered': 1, 'checked': 4}
+    assert len(folders) == 2
     cur = {v['name']: v for v in lib.current_files().values()}
     assert os.path.basename(cur['张三_流水.txt']['path']).startswith('重点_')
     assert cur['张三_户籍.txt']['folder'] == f'李四_{id2}'
@@ -356,7 +358,9 @@ def test_sync_updates_moves_renames_edits_and_deletes(tmp_path):
     m, _e = lib.cumulative_matrix()
     assert m[(f'李四_{id2}', '工商银行')] == 1 and m[(f'张三_{ID}', '工商银行')] == 3
     # 再同步一次:没有新变化
-    assert Library(str(out)).sync() == {'moved': 0, 'gone': 0, 'unregistered': 1, 'checked': 3}
+    st = Library(str(out)).sync()
+    assert st.pop('folders') == set()
+    assert st == {'moved': 0, 'gone': 0, 'unregistered': 1, 'checked': 3}
     # 对照表标出已删除
     p = write_name_map(str(out), Library(str(out)).file_records())
     wb = openpyxl.load_workbook(p)

@@ -38,6 +38,10 @@ def build_parser():
     p.add_argument('--undo', metavar='台账', dest='undo_journal',
                    help='撤销一次文件整理:传入结果目录里的「整理台账_*.jsonl」,'
                         '把文件全部还原回原位置')
+    p.add_argument('--accounts-only', metavar='目录',
+                   help='对已经分好类的文件夹补做账户汇总表 / 流水整理版,不解压不归档:'
+                        '可传归档库、某人的文件夹,或任意放着流水的文件夹'
+                        '(配合 --no-tidy-flows / --no-account-summary 只做其中一项)')
     p.add_argument('--roster', metavar='文件',
                    help='人员名单文件(txt 每行一人,或 Excel)')
     p.add_argument('--kw', action='append', default=[], metavar='关键字',
@@ -234,6 +238,18 @@ def main(argv=None):
             print(f'      整理前: {src}')
             print(f'      整理后: {dst}')
         sys.exit(0)
+
+    if args.accounts_only:
+        from . import accounts
+        if not os.path.isdir(args.accounts_only):
+            print(f'错误:目录不存在: {args.accounts_only}', file=sys.stderr)
+            sys.exit(2)
+        if args.no_account_summary and args.no_tidy_flows:
+            print('错误:账户汇总表和流水整理版都关掉了,没有要做的。', file=sys.stderr)
+            sys.exit(2)
+        res = accounts.run_on_folder(args.accounts_only, summary=not args.no_account_summary,
+                                     tidy=not args.no_tidy_flows, log=print)
+        sys.exit(1 if res['failed'] else 0)
 
     if args.undo_journal:
         from .undo import undo

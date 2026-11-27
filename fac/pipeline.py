@@ -499,6 +499,9 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 f'本次结果将合并进去(同一人/企业并入原文件夹,已导入过的相同文件自动跳过)。')
             # 先把你在结果目录里手动做的调整(挪动/改名/删除)同步进归档记录
             summary['sync'] = lib.sync(cancel_event)
+            # 你挪动 / 删除过文件的人,账户汇总也要按现在的文件重做
+            flow_touched.update(f for f in summary['sync'].get('folders', ())
+                                if f not in SPECIAL_FOLDERS)
         for item in plan:
             if item.action != 'place':
                 continue

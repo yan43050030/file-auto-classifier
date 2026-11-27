@@ -316,7 +316,8 @@ class Library:
           (先按内容完全相同,再按"文件名包含原文件名"——你加了备注又改了内容也能认出)
           → 记一条 move;找不到 → 记一条 gone(视为你已删除)
         - 未登记的其余文件(你手动放进来的)只统计,不改动。"""
-        stats = {'moved': 0, 'gone': 0, 'unregistered': 0, 'checked': 0}
+        stats = {'moved': 0, 'gone': 0, 'unregistered': 0, 'checked': 0,
+                 'folders': set()}      # 有文件挪进 / 挪出 / 删除的人员文件夹
         state = self.current_files()
         if not state:
             return stats
@@ -376,6 +377,8 @@ class Library:
                 unreg.remove(hit)
                 self._append({'type': 'move', 'id': rid, 'path': hit, 'folder': _top(hit)})
                 stats['moved'] += 1
+                stats['folders'].add(_top(hit))
             else:
                 self._append({'type': 'gone', 'id': rid})
                 stats['gone'] += 1
+            stats['folders'].add(st['folder'])

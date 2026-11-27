@@ -126,3 +126,71 @@ def test_pipeline_writes_summary_and_ledger_ignores_it(tmp_path):
 def test_library_default_off(tmp_path):
     o = JobOptions([], '.', Roster([]))
     assert o.account_summary is False and o.tidy_flows is False
+
+
+def test_plan_folder_kinds(tmp_path):
+    p = _person(tmp_path)
+    assert A.plan_folder(str(tmp_path))[0] == 'library'
+    assert A.plan_folder(str(p)) == ('person', [(str(p), '银行流水', True)])
+    assert A.plan_folder(str(p / '银行流水'))[0] == 'person'
+    plain = tmp_path / '别人发来的流水'; plain.mkdir()
+    assert A.plan_folder(str(plain))[0] == 'plain'
+
+
+def test_run_on_library_and_plain_folder(tmp_path):
+    lib = tmp_path / 'lib'; lib.mkdir()
+    _person(lib)
+    res = A.run_on_folder(str(lib), log=lambda m: None)
+    assert res['kind'] == 'library' and len(res['summaries']) == 1 and res['tidied'] == 3
+    # 普通文件夹:流水当作同一个对象汇总,汇总表放在文件夹里,户名不拿文件夹名硬补
+    plain = tmp_path / '流水资料'; plain.mkdir()
+    (plain / '工商银行.csv').write_bytes(icbc_csv().replace('张三'.encode(), b''))
+    res = A.run_on_folder(str(plain), tidy=False, log=lambda m: None)
+    assert res['kind'] == 'plain'
+    out = plain / '账户汇总_流水资料.xlsx'
+    assert out.is_file() and str(out) == res['summaries'][0]
+    import openpyxl
+    ws = openpyxl.load_workbook(out)['账户汇总']
+    assert ws.cell(2, 3).value in (None, '')                 # 户名
+    assert not (plain / A.TIDY_DIR).exists()
+    # 再跑一次不会把自己生成的汇总表当流水读
+    res = A.run_on_folder(str(plain), tidy=False, log=lambda m: None)
+    assert len(res['summaries']) == 1
+
+
+def test_cli_accounts_only(tmp_path):
+    from fac.cli import main
+    _person(tmp_path)
+    with pytest.raises(SystemExit) as e:
+        main(['--accounts-only', str(tmp_path), '--no-tidy-flows'])
+    assert e.value.code == 0
+    assert list(tmp_path.rglob('账户汇总_张三.xlsx'))
+    assert not list(tmp_path.rglob(A.TIDY_DIR))
+
+
+def test_sync_regenerates_after_manual_delete(tmp_path):
+    src = tmp_path / 'in'; src.mkdir()
+    with zipfile.ZipFile(src / '建设银行.zip', 'w') as z:
+        z.writestr(f'张三_{ID}_交易流水.xlsx', ccb_xlsx())
+    with zipfile.ZipFile(src / '工商银行.zip', 'w') as z:
+        z.writestr(f'张三_{ID}_工商银行.csv', icbc_csv())
+    out = tmp_path / 'out'
+    opts = dict(intelligent=False, unit_mode='category', account_summary=True)
+    _run(JobOptions([str(src)], str(out), Roster.from_text(f'张三,{ID}'), **opts))
+    flow = out / f'张三_{ID}' / '银行流水'
+    summ = next(flow.glob('账户汇总_*.xlsx'))
+    next(flow.glob('*工商银行.csv')).unlink()              # 手动删掉工行流水
+    # 下次导入(哪怕没有此人的新反馈)前自动同步,此人的汇总按现在的文件重做
+    src2 = tmp_path / 'in2'; src2.mkdir()
+    (src2 / '无关.txt').write_text('x', encoding='utf-8')
+    _run(JobOptions([str(src2)], str(out), Roster.from_text(f'张三,{ID}'), **opts))
+    import openpyxl
+    ws = openpyxl.load_workbook(summ)['账户汇总']
+    accts = {row[4] for row in ws.iter_rows(min_row=2, values_only=True) if isinstance(row[0], int)}
+    assert accts == {'2301000000000000001'}
+    # 流水全删了:同步时旧汇总表一并删掉
+    next(flow.glob('*交易流水.xlsx')).unlink()
+    st = Library(str(out)).sync()
+    assert f'张三_{ID}' in st['folders']
+    A.build(str(out / f'张三_{ID}'), log=lambda m: None)
+    assert not summ.exists()

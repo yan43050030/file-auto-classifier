@@ -294,6 +294,9 @@ class MainWindow(OrganizeMixin, QMainWindow):
         self.btn_sync = QPushButton('🔄 同步归档记录')
         self.btn_sync.clicked.connect(self._sync_library)
         sr.addWidget(self.btn_sync)
+        self.btn_accounts = QPushButton('📊 生成账户汇总')
+        self.btn_accounts.clicked.connect(self._accounts_only)
+        sr.addWidget(self.btn_accounts)
         sr.addStretch()
         lay.addLayout(sr)
         # 密码本:放在这里一眼可见(加密压缩包会先用其中的密码自动尝试)
@@ -614,12 +617,27 @@ class MainWindow(OrganizeMixin, QMainWindow):
             return
         self._begin_job()
 
+        summ, tidy = self._flow_opts()
+
         def work():
             lib = Library(out, log=self._log)
             st = lib.sync(self._cancel)
             cum, cum_empty = lib.cumulative_matrix()
             write_matrix_report(out, cum, self._log, empty=cum_empty)
             write_name_map(out, lib.file_records(), self._log)
+            # 挪动 / 删除过文件的人:账户汇总按现在的文件重做
+            st['accounts'] = 0
+            if (summ or tidy) and st.get('folders'):
+                from . import accounts
+                for f in sorted(st['folders']):
+                    d = os.path.join(out, f)
+                    if not os.path.isdir(os.path.join(d, accounts.FLOW_SUB)):
+                        continue
+                    try:
+                        o, _r, _n = accounts.build(d, summary=summ, tidy=tidy, log=self._log)
+                        st['accounts'] += bool(o)
+                    except Exception as e:
+                        self._log(f'  [提示] {f} 的账户汇总生成失败: {e}')
             self._ui_call(lambda: self._on_sync_done(st))
 
         threading.Thread(target=work, daemon=True).start()
@@ -636,7 +654,99 @@ class MainWindow(OrganizeMixin, QMainWindow):
             f'· 你挪动/改名过的 {st["moved"]} 个,已更新到新位置\n'
             f'· 已不在归档库里的 {st["gone"]} 个,记为已删除\n'
             f'· 你手动放进来、未登记的 {st["unregistered"]} 个,保持原样\n\n'
-            f'反馈核对表、文件名对照表已同步更新。以后导入新反馈前也会自动同步。')
+            f'反馈核对表、文件名对照表已同步更新。以后导入新反馈前也会自动同步。'
+            + (f'\n涉及的 {st["accounts"]} 人的账户汇总表已按现在的文件重新生成。'
+               if st.get('accounts') else ''))
+
+    def _flow_opts(self):
+        """(账户汇总表, 流水整理版) 两个勾选。"""
+        return (self._flow_ck['account_summary'].isChecked(),
+                self._flow_ck['tidy_flows'].isChecked())
+
+    def _accounts_only(self):
+        """对已经分好的文件夹补做账户汇总 / 流水整理版:可选整个归档库、某个人、
+        或任意放着流水的普通文件夹。不移动、不改名任何文件。"""
+        from . import accounts
+        summ, tidy = self._flow_opts()
+        if not (summ or tidy):
+            QMessageBox.information(self, '提示', '「分类选项」页的「账户汇总表」「流水整理版」都没勾选。')
+            return
+        start = self.txt_out.text().strip()
+        sel = [self.inputs[i.row()] for i in self.lst_inputs.selectedIndexes()
+               if i.row() < len(self.inputs)]
+        dirs = [x for x in sel or self.inputs if os.path.isdir(x)]
+        if dirs:
+            start = dirs[-1]
+        d = QFileDialog.getExistingDirectory(
+            self, '选择归档库 / 某人的文件夹 / 放流水的文件夹', start if os.path.isdir(start) else '')
+        if not d:
+            return
+        kind, items = accounts.plan_folder(d)
+        if kind == 'library' and len(items) > 1:
+            r = QMessageBox.question(
+                self, '生成账户汇总',
+                f'这是归档库,共 {len(items)} 个人员/企业有「银行流水」。\n'
+                f'将逐个读取他们的全部流水,生成账户汇总表'
+                + ('和流水整理版' if tidy else '') + '(不移动、不改名任何文件)。\n\n'
+                '文件多时需要一些时间,可随时取消。继续?',
+                QMessageBox.Yes | QMessageBox.No)
+            if r != QMessageBox.Yes:
+                return
+        elif kind == 'plain':
+            r = QMessageBox.question(
+                self, '生成账户汇总',
+                f'「{os.path.basename(d)}」不是按人归档的文件夹,\n'
+                '里面的全部流水会当作同一个对象汇总,汇总表放在这个文件夹里。继续?',
+                QMessageBox.Yes | QMessageBox.No)
+            if r != QMessageBox.Yes:
+                return
+        self._begin_job()
+
+        def work():
+            try:
+                res = accounts.run_on_folder(d, summary=summ, tidy=tidy, log=self._log,
+                                             progress=self._on_progress, cancel=self._cancel)
+            except Exception as e:
+                self._log(f'生成失败: {e}')
+                res = {'summaries': [], 'tidied': 0, 'no_flow': [], 'failed': [d],
+                       'cancelled': False, 'kind': kind}
+            self._ui_call(lambda: self._on_accounts_done(d, res))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_accounts_done(self, d, res):
+        self.btn_run.setEnabled(True)
+        self._on_mode_changed()
+        self.btn_cancel.setEnabled(False)
+        self.progress.setVisible(False)
+        self.lbl_prog.setVisible(False)
+        if res.get('cancelled'):
+            return
+        msg = f'账户汇总表 {len(res["summaries"])} 份'
+        if res['tidied']:
+            msg += f',流水整理版新生成 {res["tidied"]} 份'
+        msg += '。'
+        if res['no_flow']:
+            msg += f'\n{len(res["no_flow"])} 个没有认出流水(可能是 PDF / 扫描件 / 回函)。'
+        if res['failed']:
+            msg += f'\n{len(res["failed"])} 个生成失败,详见日志。'
+        if len(res['summaries']) == 1:
+            msg += f'\n\n{res["summaries"][0]}'
+        elif res['summaries']:
+            msg += f'\n\n在各人「银行流水」目录下,文件名以「账户汇总_」开头。'
+        box = QMessageBox(self)
+        box.setWindowTitle('生成完成')
+        box.setText(msg)
+        b_open = box.addButton('打开文件夹', QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Ok)
+        box.exec()
+        if box.clickedButton() is b_open:
+            target = os.path.dirname(res['summaries'][0]) if len(res['summaries']) == 1 else d
+            target = os.path.normpath(target)
+            try:
+                os.startfile(target)
+            except Exception:
+                QMessageBox.information(self, '提示', target)
 
     def _on_out_fixed(self, on):
         # 勾上:固定不动;取消:恢复跟随最后添加的压缩包

@@ -461,3 +461,30 @@ def test_preview_long_names_scroll_horizontally(win, app):
     win._confirm_plan(plan)
     assert seen['col0'] >= seen['need'] and seen['tip'] == long
     assert seen['stretch'] is False
+
+
+def test_accounts_button_on_existing_library(win, app, tmp_path, monkeypatch):
+    """「📊 生成账户汇总」:对已经分好的归档库补做汇总表,不动原文件。"""
+    pytest.importorskip('pandas')
+    import time
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from flow_samples import ccb_xlsx
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    d = tmp_path / 'lib' / '张三' / '银行流水'
+    d.mkdir(parents=True)
+    (d / '建设银行.xlsx').write_bytes(ccb_xlsx())
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory',
+                        lambda *a, **k: str(tmp_path / 'lib'))
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.Yes)
+    done = {}
+    monkeypatch.setattr(win, '_on_accounts_done', lambda path, res: done.update(res))
+    win._flow_ck['tidy_flows'].setChecked(False)
+    win._accounts_only()
+    t0 = time.time()
+    while not done and time.time() - t0 < 30:
+        app.processEvents()
+        time.sleep(0.02)
+    assert done['kind'] == 'library' and len(done['summaries']) == 1
+    assert (d / '账户汇总_张三.xlsx').is_file()
+    assert not (d / '流水整理版').exists()
+    assert sorted(x.name for x in d.iterdir()) == ['建设银行.xlsx', '账户汇总_张三.xlsx']

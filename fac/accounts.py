@@ -371,21 +371,28 @@ def write_xlsx(r, path, who=''):
     os.replace(long_path(tmp), long_path(path))
 
 
-def build(person_dir, summary=True, tidy=False, flow_sub='银行流水', log=print):
+def build(person_dir, summary=True, tidy=False, flow_sub='银行流水', log=print, fill_name=True):
     """为一个人员 / 企业文件夹生成(覆盖)账户汇总表,并按需生成流水整理版。
+    flow_sub='' 时直接读 person_dir 本身(普通文件夹);fill_name=False 时户名不拿文件夹名补。
     返回 (汇总表路径或 None, 汇总 dict 或 None, 新生成的整理版个数)。"""
-    flow_dir = os.path.join(person_dir, flow_sub)
-    paths = flow_files(flow_dir)
-    if not paths:
-        return None, None, 0
+    flow_dir = os.path.join(person_dir, flow_sub) if flow_sub else person_dir
     from .library import parse_folder
     who_name = parse_folder(os.path.basename(os.path.normpath(person_dir)))[0]
-    r = summarize(paths, log, who_name)
-    out = None
-    if summary and r['accounts']:
-        who = who_name or os.path.basename(os.path.normpath(person_dir))
-        out = os.path.join(flow_dir, f'{SUMMARY_PREFIX}{who}.xlsx')
+    who = who_name or os.path.basename(os.path.normpath(person_dir))
+    out = os.path.join(flow_dir, f'{SUMMARY_PREFIX}{who}.xlsx')
+    paths = flow_files(flow_dir)
+    r = summarize(paths, log, who_name if fill_name else '') if paths else None
+    if summary and r and r['accounts']:
         write_xlsx(r, out, who)
+    else:
+        if summary and os.path.isfile(long_path(out)):    # 流水都没了:旧汇总表不能留着误导
+            try:
+                os.remove(long_path(out))
+            except OSError:
+                pass
+        out = None
+    if r is None:
+        return None, None, 0
     n = 0
     if tidy:
         for fp in r['flow_paths']:
@@ -418,3 +425,83 @@ def tidy_file(path, flow_dir):
     with open(long_path(dst), 'wb') as fp:
         fp.write(data)
     return 'new'
+
+
+# ---------- 对已经分好的文件夹单独生成 ----------
+
+FLOW_SUB = '银行流水'
+
+
+def plan_folder(path):
+    """看选中的是什么文件夹,返回 (类型, [(人员文件夹, flow_sub, fill_name)])。
+    类型:'library' 归档库(下面各人有「银行流水」)/ 'person' 某个人 / 'plain' 普通文件夹。"""
+    path = os.path.normpath(path)
+    if os.path.basename(path) == FLOW_SUB:              # 直接选了某人的「银行流水」
+        return 'person', [(os.path.dirname(path), FLOW_SUB, True)]
+    if os.path.isdir(long_path(os.path.join(path, FLOW_SUB))):
+        return 'person', [(path, FLOW_SUB, True)]
+    people = []
+    try:
+        names = sorted(os.listdir(long_path(path)))
+    except OSError:
+        names = []
+    for n in names:
+        sub = os.path.join(path, n)
+        if not n.startswith('.') and os.path.isdir(long_path(os.path.join(sub, FLOW_SUB))):
+            people.append((sub, FLOW_SUB, True))
+    if people:
+        return 'library', people
+    return 'plain', [(path, '', False)]
+
+
+def run_on_folder(path, summary=True, tidy=True, log=print, progress=None, cancel=None):
+    """对已经分类好的文件夹补做账户汇总 / 流水整理版(不移动、不改名任何文件,不写归档记录)。
+    返回 {'kind', 'people', 'summaries': [...], 'tidied', 'no_flow': [...], 'failed': [...],
+          'cancelled'}。"""
+    kind, items = plan_folder(path)
+    res = {'kind': kind, 'people': len(items), 'summaries': [], 'tidied': 0,
+           'no_flow': [], 'failed': [], 'cancelled': False}
+    if not _available():
+        log('缺少流水识别组件(pandas),无法生成账户汇总表 / 流水整理版。')
+        res['failed'].append(path)
+        return res
+    what = '、'.join(x for x, on in (('账户汇总表', summary), ('流水整理版', tidy)) if on)
+    desc = {'library': f'归档库,共 {len(items)} 个人员/企业有「银行流水」',
+            'person': '单个人员/企业', 'plain': '普通文件夹(里面的流水当作同一个对象汇总)'}[kind]
+    log(f'生成{what}:{path}\n  识别为{desc}')
+    for i, (pdir, sub, fill) in enumerate(items, 1):
+        if cancel is not None and cancel.is_set():
+            res['cancelled'] = True
+            log('已取消。已生成的保留。')
+            break
+        if progress:
+            progress('accounts', i - 1, len(items))
+        who = os.path.basename(pdir)
+        try:
+            out, r, n = build(pdir, summary=summary, tidy=tidy, flow_sub=sub, log=log,
+                              fill_name=fill)
+        except Exception as e:
+            res['failed'].append(who)
+            log(f'  [提示] {who}: 生成失败 {e}')
+            continue
+        res['tidied'] += n
+        if not r or not (r['accounts'] or r['flow_paths']):
+            res['no_flow'].append(who)
+            log(f'  {who}: 没有认出流水或开户信息')
+            continue
+        if out:
+            res['summaries'].append(out)
+            t = r['total']
+            bad = sum(1 for f in r['files'] if not f['ok'])
+            log(f'  {who}: {t["accounts"]} 个账户(有流水 {t["with_flow"]} 个),'
+                f'合计余额 {float(t["balance"]):,.2f} 元'
+                + (f';整理版新生成 {n} 份' if tidy else '')
+                + (f';{bad} 个文件不是流水表格,未计入' if bad else ''))
+        elif tidy:
+            log(f'  {who}: 整理版新生成 {n} 份')
+    if progress:
+        progress('accounts', len(items), len(items))
+    log(f'完成:账户汇总表 {len(res["summaries"])} 份' + (f',流水整理版新生成 {res["tidied"]} 份' if tidy else '')
+        + (f';{len(res["no_flow"])} 个没认出流水' if res['no_flow'] else '')
+        + (f';{len(res["failed"])} 个失败' if res['failed'] else '') + '。')
+    return res
