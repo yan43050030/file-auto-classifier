@@ -436,3 +436,28 @@ def test_txt_password_option_off_and_migrated(win, tmp_path, monkeypatch):
     assert conf.load_config()['auto_pw_txt'] is False
     p.write_text(json.dumps({'auto_pw_txt': True, 'pw_txt_v502': True}), encoding='utf-8')
     assert conf.load_config()['auto_pw_txt'] is True      # 迁移后自己再打开 → 尊重
+
+
+def test_preview_long_names_scroll_horizontally(win, app):
+    """预览清单:文件名很长时列宽跟着内容走、出现横向滚动条,不再截成省略号。"""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QDialog, QTreeWidget
+    from fac.pipeline import PlanItem
+    long = '【某某查【2026】第123456号_2026年11月11日】张三_230303197511020127_' * 3 + '保险信息.xlsx'
+    plan = [PlanItem('/x/a', long, '某单位', 'place', ['张三'], via='名单')]
+    seen = {}
+
+    def grab():
+        d = app.activeModalWidget()
+        if isinstance(d, QDialog):
+            t = d.findChild(QTreeWidget)
+            fm = t.fontMetrics()
+            seen['col0'] = t.header().sectionSize(0)
+            seen['need'] = min(fm.horizontalAdvance(long), 900)
+            seen['tip'] = t.topLevelItem(0).toolTip(0)
+            seen['stretch'] = t.header().stretchLastSection()
+            d.reject()
+    QTimer.singleShot(200, grab)
+    win._confirm_plan(plan)
+    assert seen['col0'] >= seen['need'] and seen['tip'] == long
+    assert seen['stretch'] is False

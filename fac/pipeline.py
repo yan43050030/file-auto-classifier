@@ -19,7 +19,7 @@ from .rules import Rule, match_rules
 from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
 from .company import build_company_map, CompanyMatcher, known_names_from_files
 from .emptyfile import empty_reason, BUCKET_EMPTY, DEFAULT_MAX_KB
-from .doctype import detect_category, is_bank_related, is_pboc
+from .doctype import detect_category, is_bank_related, is_bank_flow, is_pboc
 from .library import Library, SPECIAL_FOLDERS, parse_folder
 from .naming import shorten_name, shorten_unit, with_date
 from . import extract as ex
@@ -608,7 +608,8 @@ def _target_name(fname, unit, folder, opts):
 def _mark_empty(plan, opts: JobOptions, tee):
     """给归到人员/企业名下的小文件做"疑似空值"判定(未分类的不动)。
 
-    只针对银行/支付类反馈:机动车、出入境、户籍等信息本来就小,不能当空值。"""
+    只针对银行/支付类反馈里的**交易流水**:机动车、出入境、户籍等信息,
+    以及银行的开户信息、理财、基金、保险等资料本来就小,不能当空值。"""
     max_bytes = opts.empty_max_kb * 1024
     n = 0
     for item in plan:
@@ -624,6 +625,8 @@ def _mark_empty(plan, opts: JobOptions, tee):
             continue
         if is_pboc(item.fname, item.unit):
             continue          # 人民银行账户信息:汇总性质,一律当作有效数据
+        if not is_bank_flow(item.src, item.fname):
+            continue          # 开户信息、理财、基金……不是交易流水,本来就小,不判空值
         # 被查询对象的姓名/证号:表格里只出现这些不算"有内容"
         kws = []
         for p in item.persons or []:

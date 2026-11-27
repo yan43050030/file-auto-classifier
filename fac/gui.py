@@ -35,6 +35,7 @@ from . import config as conf
 from . import extract as ex
 
 from .gui_style import QSS, TEXT_SEC, CARD_BG, BORDER, PRIMARY, apply_theme  # noqa: F401
+from .gui_style import fit_tree_columns, roomy_dialog
 from .gui_organize import OrganizeMixin
 from .gui_tips import apply_tooltips, TIPS
 from .gui_bridge import UiBridge, in_main_thread
@@ -973,7 +974,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
             self._flush_ui()
             dlg = QDialog(self)
             dlg.setWindowTitle(f'预览归档计划(共 {len(plan)} 个文件)')
-            dlg.resize(860, 520)
+            roomy_dialog(dlg, 1180, 640)
             lay = QVBoxLayout(dlg)
             tip = QLabel('双击"归入文件夹"一格可直接改;选中多行(Ctrl/Shift)后'
                          '点"改归到…"可批量改。改动只影响本次归档。')
@@ -994,11 +995,14 @@ class MainWindow(OrganizeMixin, QMainWindow):
                 if show_new:
                     cols.append(getattr(item, 'new_name', '') or item.fname)
                 it = QTreeWidgetItem(tree, cols)
+                it.setToolTip(0, item.fname)    # 鼠标停留看完整文件名
+                if show_new:
+                    it.setToolTip(4, cols[4])
                 if item.action == 'place':      # 拆分行不支持手改
                     it.setFlags(it.flags() | Qt.ItemIsEditable)
                 rows.append((it, item))
-            for i, w in enumerate([300, 140, 220, 90]):
-                tree.header().resizeSection(i, w)
+            # 列宽按内容定,文字多时出现横向滚动条,不再被截成省略号
+            fit_tree_columns(tree)
 
             def _dbl(it, col):
                 if col == 2 and (it.flags() & Qt.ItemIsEditable):

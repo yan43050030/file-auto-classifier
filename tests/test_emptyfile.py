@@ -77,14 +77,15 @@ def test_size_threshold_and_unreadable(tmp_path):
 
 def test_pipeline_puts_empty_into_person_subfolder_and_report(tmp_path):
     src = tmp_path / 'in'; src.mkdir()
-    a = xlsx(tmp_path / 'h.xlsx', [HEAD])
+    FLOW = ['交易日期', '交易金额', '借贷标志', '账户余额', '对方户名', '摘要']
+    a = xlsx(tmp_path / 'h.xlsx', [FLOW])                       # 流水:只有表头
     b = xlsx(tmp_path / 'r.xlsx',
-             [HEAD, [1, '张三', ID, '某某支行', '6222020200012345678', 88]])
+             [FLOW, ['2024-01-02', 88, '贷', 1000, '李四', '转账']])
     with zipfile.ZipFile(src / '甲银行.zip', 'w') as z:
         z.write(a, '张三_账户查询.xlsx')
     with zipfile.ZipFile(src / '乙银行.zip', 'w') as z:
         z.write(b, '张三_账户查询.xlsx')
-        z.writestr('张三_回函.txt', '经查,张三在我行无开户记录。')
+        z.writestr('张三_回函.txt', '经查,未查询到张三在我行的交易流水。')
     out = tmp_path / 'out'
     logs, r = [], {}
     run_job(JobOptions([str(src)], str(out), Roster.from_text(f'张三,{ID}'),
@@ -125,22 +126,25 @@ def test_empty_only_for_bank_feedback(tmp_path):
                                        ['京A12345', '小型轿车', '张三', '正常']])
     car_none = xlsx(tmp_path / 'car0.xlsx', [['号牌号码', '车辆类型', '所有人', '状态']])
     acct_none = xlsx(tmp_path / 'acct.xlsx', [['姓名', '证件号码', '开户行', '账号', '余额']])
+    flow_none = xlsx(tmp_path / 'flow.xlsx', [['交易日期', '交易金额', '余额', '对方户名']])
     with zipfile.ZipFile(src / '车管所.zip', 'w') as z:
         z.write(car, '张三_机动车登记信息.xlsx')
         z.write(car_none, '张三_驾驶证信息.xlsx')          # 只有表头,但不是银行
     with zipfile.ZipFile(src / '出入境.zip', 'w') as z:
         z.writestr('张三_出入境记录.txt', '无出入境记录')    # 有"无"字样,但不是银行
     with zipfile.ZipFile(src / '协查反馈.zip', 'w') as z:
-        z.write(acct_none, '张三_查询结果.xlsx')            # 单位名看不出,但表头是账户列
+        z.write(acct_none, '张三_查询结果.xlsx')            # 账户列表头:是银行资料,但不是流水
+        z.write(flow_none, '张三_协查结果.xlsx')            # 流水表头、无数据 → 疑似空值
     with zipfile.ZipFile(src / '建行.zip', 'w') as z:       # 简称
-        z.writestr('张三_回函.txt', '经查,该人在我行无开户记录。')
+        z.writestr('张三_回函.txt', '经查,该人在我行无交易流水。')
     out = tmp_path / 'out'
     run_job(JobOptions([str(src)], str(out), Roster.from_text('张三'),
                        intelligent=False, empty_detect=True, unit_mode='category'),
             log=lambda m: None, progress=lambda *a: None,
             ask_password=lambda n, a: None)
     empties = sorted(os.listdir(out / '张三' / BUCKET_EMPTY))
-    assert empties == ['【协查反馈】张三_查询结果.xlsx', '【建行】张三_回函.txt']
+    assert empties == ['【协查反馈】张三_协查结果.xlsx', '【建行】张三_回函.txt']
+    assert '【协查反馈】张三_查询结果.xlsx' in os.listdir(out / '张三' / '银行流水')
     others = sorted(os.listdir(out / '张三' / '其他数据'))
     assert others == ['【出入境】张三_出入境记录.txt', '【车管所】张三_机动车登记信息.xlsx',
                       '【车管所】张三_驾驶证信息.xlsx']
@@ -154,3 +158,33 @@ def test_is_bank_related(tmp_path):
     assert is_bank_related(str(t), '张三_支付宝账户.txt', '某单位')
     assert not is_bank_related(str(t), '张三_回执.txt', '公安局平安建设办公室')
     assert not is_bank_related(str(t), '张三_出入境.txt', '出入境管理局')
+
+
+def test_bank_non_flow_files_never_empty(tmp_path):
+    """开户信息、金融理财等不是交易流水:再小也不进疑似空值,放「银行流水」(银行资料)。"""
+    from fac.emptyfile import BUCKET_EMPTY
+    from fac.doctype import is_bank_flow
+    src = tmp_path / 'in'; src.mkdir()
+    opening = xlsx(tmp_path / 'o.xlsx', [['户名', '证件号码', '账号', '开户日期', '联系电话'],
+                                         ['张三', ID, '6222', '2015-01-01', '暂无']])
+    licai = xlsx(tmp_path / 'l.xlsx', [['产品名称', '购买日期', '购买金额', '状态']])   # 理财:只有表头
+    licai_flow = xlsx(tmp_path / 'lf.xlsx', [['交易日期', '交易金额', '余额', '摘要']])  # 名字写理财
+    with zipfile.ZipFile(src / '工商银行.zip', 'w') as z:
+        z.write(opening, '张三_开户信息.xlsx')
+        z.writestr('张三_账户信息.txt', '户名:张三 账号:6222… 状态:正常 未发生冻结')
+    with zipfile.ZipFile(src / '建设银行.zip', 'w') as z:
+        z.write(licai, '张三_金融理财.xlsx')
+        z.write(licai_flow, '张三_理财产品.xlsx')
+    out = tmp_path / 'out'
+    run_job(JobOptions([str(src)], str(out), Roster.from_text('张三'),
+                       intelligent=False, empty_detect=True, unit_mode='category'),
+            log=lambda m: None, progress=lambda *a: None,
+            ask_password=lambda n, a: None)
+    assert not (out / '张三' / BUCKET_EMPTY).exists()
+    assert sorted(os.listdir(out / '张三' / '银行流水')) == [
+        '【工商银行】张三_开户信息.xlsx', '【工商银行】张三_账户信息.txt',
+        '【建设银行】张三_理财产品.xlsx', '【建设银行】张三_金融理财.xlsx']
+    # 文件名写明是流水的,即使混了别的词也算流水
+    t = tmp_path / 'x.txt'; t.write_text('x', encoding='utf-8')
+    assert is_bank_flow(str(t), '张三_理财账户交易流水.xlsx')
+    assert not is_bank_flow(str(t), '张三_开户信息.xlsx')

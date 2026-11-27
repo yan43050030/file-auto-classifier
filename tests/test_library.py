@@ -77,7 +77,7 @@ def test_multiple_archives_one_folder_by_category(tmp_path):
     flow = xlsx(tmp_path / 'f.xlsx', [FLOW_HEAD, ['2024-01-02', 100, '贷', 5000, '李四', '转账']])
     out = tmp_path / 'out'
     run({'建设银行.zip': {'张三_查询结果.xlsx': flow, '张三_开户信息.txt': '开户行:朝阳支行,账号6222…' * 3},
-         '工商银行.zip': {'张三_回函.txt': '经查,张三在我行无账户。'},
+         '工商银行.zip': {'张三_回函.txt': '经查,未查询到张三的交易流水。'},
          '房产中心.zip': {'张三_房产信息.txt': '坐落:北京市朝阳区某某小区1号楼101,面积90平方米' * 2}},
         out, f'张三,{ID}', empty_detect=True)
     person = out / f'张三_{ID}'

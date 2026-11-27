@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from .organize import OrganizeOptions, run_organize
 from . import undo as undo_mod
 from . import config as conf
+from .gui_style import fit_tree_columns, roomy_dialog
 
 
 class OrganizeMixin:
@@ -120,7 +121,7 @@ class OrganizeMixin:
             return
         dlg = QDialog(self)
         dlg.setWindowTitle(f'整理历史 — 匹配「{kw}」({len(rows)} 条)')
-        dlg.resize(900, 460)
+        roomy_dialog(dlg, 1100, 520)
         lay = QVBoxLayout(dlg)
         tree = QTreeWidget()
         tree.setHeaderLabels(['整理时间', '文件名', '整理前位置', '整理后位置'])
@@ -128,8 +129,7 @@ class OrganizeMixin:
         tree.setAlternatingRowColors(True)
         for run_at, fname, src, dst, _cat in rows:
             QTreeWidgetItem(tree, [run_at.replace('T', ' '), fname, src, dst])
-        for i, w in enumerate([140, 200, 270, 270]):
-            tree.header().resizeSection(i, w)
+        fit_tree_columns(tree)
         lay.addWidget(tree)
         box = QDialogButtonBox(QDialogButtonBox.Close)
         box.rejected.connect(dlg.reject)

@@ -109,6 +109,40 @@ def _source_says(text):
     return None
 
 
+# 银行反馈里"不是交易流水"的资料:开户信息、账户信息、理财、基金、保险、贷款、
+# 信用卡资料、存款证明、签约信息、客户 / 基本信息、资产 …… 这些本来就小,不能当疑似空值
+_NOT_FLOW_NAME = re.compile(
+    r'开户|账户信息|帐户信息|账户资料|帐户资料|客户信息|客户资料|基本信息|理财|基金|'
+    r'保险|贷款|借款|信用卡申请|存款证明|资信|签约|绑定|销户|挂失|冻结|查封|资产|'
+    r'持仓|证券|期货|保管箱|印鉴|预留|联系方式|手机号')
+
+
+def is_bank_flow(path, fname=None):
+    """是不是"交易流水"类文件(疑似空值只对这类判定)。
+
+    文件名写明开户信息 / 理财 / 基金 / 保险 / 贷款……的不是(除非同时写着"流水 / 交易明细");
+    文件名写着 流水 / 交易明细 / 对账单 的是;
+    文件名看不出时看表头:有交易日期 + 交易金额 / 借贷这类流水列的是(只有表头、没有数据的也算)。"""
+    fname = fname or os.path.basename(path)
+    stem = os.path.splitext(fname)[0]
+    if _FLOW_NAME.search(stem):
+        return True
+    if _NOT_FLOW_NAME.search(stem):
+        return False
+    low = path.lower()
+    try:
+        if low.endswith(('.xlsx', '.xlsm', '.xls', '.csv')):
+            return _looks_like_flow_text(_head_text_table(path))
+        if low.endswith(('.pdf', '.docx', '.doc', '.txt')):
+            from .content_match import extract_text
+            text = extract_text(path, max_chars=4000) or ''
+            # 回函写明"未查询到交易流水 / 无交易明细"之类,也算流水查询的回复
+            return _looks_like_flow_text(text) or bool(_FLOW_NAME.search(text))
+    except Exception:
+        pass
+    return False
+
+
 def is_pboc(fname='', unit=''):
     return bool(_PBOC.search(fname or '') or _PBOC.search(unit or ''))
 

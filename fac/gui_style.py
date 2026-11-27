@@ -206,3 +206,42 @@ def _arrow_file(direction='down'):
     except Exception:
         return ''
     return path.replace('\\', '/')
+
+
+def fit_tree_columns(tree, max_width=900, sample=400):
+    """表格列宽按内容定(取前若干行估算),不再挤成省略号;总宽超出窗口时出现横向滚动条。
+
+    列很多、行很多时不用 ResizeToContents(要扫全部行,十万行会卡);
+    这里只看前 sample 行,够用且快。用户仍可拖动列宽。"""
+    from PySide6.QtWidgets import QHeaderView, QAbstractItemView
+    from PySide6.QtCore import Qt
+    hdr = tree.header()
+    hdr.setStretchLastSection(False)
+    hdr.setSectionResizeMode(QHeaderView.Interactive)
+    tree.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+    tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    tree.setTextElideMode(Qt.ElideNone)
+    fm = tree.fontMetrics()
+    cols = tree.columnCount()
+    widths = [fm.horizontalAdvance(tree.headerItem().text(c)) + 36 for c in range(cols)]
+    n = min(tree.topLevelItemCount(), sample)
+    for r in range(n):
+        it = tree.topLevelItem(r)
+        for c in range(cols):
+            widths[c] = max(widths[c], fm.horizontalAdvance(it.text(c)) + 28)
+    for c, w in enumerate(widths):
+        hdr.resizeSection(c, min(w, max_width))
+
+
+def roomy_dialog(dlg, w, h):
+    """对话框:可最大化,初始大小不超过屏幕。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowMaximizeButtonHint
+                       | Qt.WindowMinimizeButtonHint)
+    try:
+        g = QApplication.primaryScreen().availableGeometry()
+        w, h = min(w, int(g.width() * 0.92)), min(h, int(g.height() * 0.85))
+    except Exception:
+        pass
+    dlg.resize(w, h)
