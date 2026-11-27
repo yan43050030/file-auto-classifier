@@ -16,6 +16,7 @@ import datetime
 from .idcard import valid_id18, valid_id15
 from .company import valid_uscc
 from .util import long_path, sha1_of
+from .accounts import is_generated
 
 LEDGER_NAME = '归档记录.jsonl'
 # 这些是工具自己的功能文件夹,不是人员/企业
@@ -334,6 +335,8 @@ class Library:
             for f in files:
                 rel = os.path.normpath(os.path.join(rel_root, f))
                 if rel_root == '.' and (f == LEDGER_NAME or f.startswith(_TOOL_FILES)):
+                    continue
+                if is_generated(rel):       # 账户汇总表、流水整理版
                     continue
                 if os.path.normcase(rel) not in registered:
                     unreg.append(rel)

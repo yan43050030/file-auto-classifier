@@ -13,6 +13,10 @@ pdfplumber      # PDF 内容匹配
 xlrd            # 旧版 Excel(.xls)内容匹配
 olefile         # 旧版 Word(.doc)内容提取(缺失时自动退回字节扫描)
 
+# 银行流水:账户汇总表 / 流水整理版(fac/flowcore,与 Case Intel 同一套识别)
+pandas          # 读各银行流水表格
+lxml            # 网页格式导出的 .xls 流水
+
 # 界面框架
 PySide6>=6.5    # Qt for Python — V3.0 核心依赖
 

@@ -19,6 +19,8 @@ DEFAULTS = {
     'unit_mode': 'category',     # category | subfolder | prefix | none
     'out_fixed': False,          # 输出目录固定为归档库
     'short_names': True,         # 精简文件名(【单位】信息_姓名_证号)
+    'account_summary': True,     # 银行流水目录生成《账户汇总_姓名.xlsx》
+    'tidy_flows': True,          # 每份流水另存整理版(银行流水/流水整理版)
     'layout_v46': True,          # 已完成 V4.6 布局迁移的标记
     'pw_txt_v502': True,         # 已完成 V5.0.2 "txt 不默认当密码本" 迁移的标记
     'preview': True,             # 试运行预览(先看清单再执行),默认开更稳妥

@@ -19,7 +19,7 @@ from .rules import Rule, match_rules
 from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
 from .company import build_company_map, CompanyMatcher, known_names_from_files
 from .emptyfile import empty_reason, BUCKET_EMPTY, DEFAULT_MAX_KB
-from .doctype import detect_category, is_bank_related, is_bank_flow, is_pboc
+from .doctype import detect_category, is_bank_related, is_bank_flow, is_pboc, CAT_FLOW
 from .library import Library, SPECIAL_FOLDERS, parse_folder
 from .naming import shorten_name, shorten_unit, with_date
 from . import extract as ex
@@ -48,7 +48,8 @@ class JobOptions:
                  rules=None, intelligent=True,
                  intelligent_min_freq=10, intelligent_exclude=None,
                  auto_company=True, empty_detect=False,
-                 empty_max_kb=DEFAULT_MAX_KB, short_names=False):
+                 empty_max_kb=DEFAULT_MAX_KB, short_names=False,
+                 account_summary=False, tidy_flows=False):
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.roster = roster
@@ -75,6 +76,10 @@ class JobOptions:
         # 文件名精简:「【单位】信息_姓名_证号」,去掉文号/批次号等噪音
         # (界面/命令行/配置默认开启;库接口默认关闭以保持旧行为)
         self.short_names = short_names
+        # 银行流水目录里的《账户汇总_姓名.xlsx》、流水整理版(仅 unit_mode=category)
+        # (界面/命令行/配置默认开启;库接口默认关闭以保持旧行为)
+        self.account_summary = account_summary
+        self.tidy_flows = tidy_flows
 
 
 class PlanItem:
@@ -116,8 +121,12 @@ def _collect_inputs(inputs, auto_pw_txt, log):
         if os.path.isdir(p):
             folder_name = os.path.basename(os.path.abspath(p))
             has_direct = False
-            for root, _, files in os.walk(p):
+            for root, dirs, files in os.walk(p):
+                # 本工具在归档库里生成的账户汇总表 / 流水整理版不当材料
+                dirs[:] = [d for d in dirs if d != '流水整理版']
                 for f in files:
+                    if f.startswith('账户汇总_'):
+                        continue
                     kind = ex.archive_kind(f)
                     if kind == 'volume-later':
                         continue
@@ -201,6 +210,7 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             raise Cancelled
 
     seen_hashes = {}     # (folder, sha1) -> 已放入的文件名
+    flow_touched = set()  # 本次放入了银行流水的人员 / 企业文件夹(之后重做账户汇总)
     # 归档库:输出目录里已有的人员/企业文件夹 + 历次归档记录(支持反复导入新反馈)
     lib = Library(opts.out_dir, log=tee)
 
@@ -262,6 +272,8 @@ def run_job(opts: JobOptions, log, progress, ask_password,
             empty_matrix[key] = empty_matrix.get(key, 0) + 1
             summary['empty'] += 1
         stats[folder] = stats.get(folder, 0) + 1
+        if cat == CAT_FLOW:
+            flow_touched.add(folder)
         return True
 
     tmp = None
@@ -569,6 +581,11 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         for r in reports:
             tee(f'已生成反馈核对表: {os.path.basename(r)}')
 
+        # ---- 6.5 银行流水目录:账户汇总表 / 流水整理版 ----
+        if opts.unit_mode == 'category' and flow_touched and \
+                (opts.account_summary or opts.tidy_flows):
+            _flow_reports(sorted(flow_touched), opts, tee, progress, ck, summary)
+
         # ---- 7. 可选:删除已成功解压的原始压缩包 ----
         if opts.delete_ok and success_archives:
             tee(f'\n开始删除 {len(success_archives)} 个已成功解压的压缩包...')
@@ -594,6 +611,42 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 pass
         if done_cb:
             done_cb(summary)
+
+
+def _flow_reports(folders, opts, tee, progress, ck, summary):
+    """对本次有新银行反馈的人员 / 企业,按其银行流水目录(历次累计)重做账户汇总表,
+    并给认出的流水生成整理版。失败只记日志,不影响分类结果。"""
+    from . import accounts
+    if not accounts._available():
+        tee('[提示] 缺少流水识别组件(pandas),未生成账户汇总表 / 流水整理版。')
+        return
+    what = '、'.join(x for x, on in (('账户汇总表', opts.account_summary),
+                                      ('流水整理版', opts.tidy_flows)) if on)
+    tee(f'\n正在为 {len(folders)} 个人员/企业生成{what}(读取各自银行流水目录里的全部流水)...')
+    made, tidied = [], 0
+    for i, folder in enumerate(folders, 1):
+        ck()
+        progress('accounts', i, len(folders))
+        try:
+            out, r, n = accounts.build(os.path.join(opts.out_dir, folder),
+                                       summary=opts.account_summary,
+                                       tidy=opts.tidy_flows, log=tee)
+        except Exception as e:
+            tee(f'  [提示] {folder} 的账户汇总生成失败: {e}')
+            continue
+        tidied += n
+        if out and r:
+            t = r['total']
+            made.append(out)
+            bad = sum(1 for f in r['files'] if not f['ok'])
+            tee(f'  {folder}: {t["accounts"]} 个账户(有流水 {t["with_flow"]} 个),'
+                f'合计余额 {float(t["balance"]):,.2f} 元'
+                + (f';{bad} 个文件不是流水表格,未计入' if bad else ''))
+    summary['account_summaries'] = made
+    if opts.account_summary:
+        tee(f'已生成账户汇总表 {len(made)} 份(在各人「{CAT_FLOW}」目录下,文件名以「账户汇总_」开头)。')
+    if opts.tidy_flows and tidied:
+        tee(f'已生成流水整理版 {tidied} 份(在各人「{CAT_FLOW}/流水整理版」里,原文件未改动)。')
 
 
 def _target_name(fname, unit, folder, opts):

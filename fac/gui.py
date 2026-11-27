@@ -373,13 +373,26 @@ class MainWindow(OrganizeMixin, QMainWindow):
         tip.setWordWrap(True)
         tip.setStyleSheet(f'color:{TEXT_SEC};font-size:12px;margin-left:22px;')
         ol.addWidget(tip)
+        ol.addWidget(self._sep())
+        # 银行流水目录:账户汇总表 / 流水整理版(仅"按资料类型分"时有银行流水目录)
+        self._flow_ck = {}
+        cb = QCheckBox('账户汇总表:在每人「银行流水」里生成《账户汇总_姓名.xlsx》'
+                       '(几个账户、各卡流水量、当前余额、合计余额)')
+        cb.setChecked(True)
+        self._flow_ck['account_summary'] = cb
+        ol.addWidget(cb)
+        cb = QCheckBox('流水整理版:每份流水另存一份列排好、去掉空列的整理版(放「流水整理版」子文件夹,原文件不动)')
+        cb.setChecked(True)
+        self._flow_ck['tidy_flows'] = cb
+        ol.addWidget(cb)
+        self._rg_unit.buttonToggled.connect(lambda *_: self._sync_flow_ck())
         ol.addStretch()
         tabs.addTab(self._scroll(to), '⚙ 分类选项')
 
         # ── 高级 tab(双列网格) ──
         ta = QWidget()
         al = QVBoxLayout(ta); al.setSpacing(8); al.setContentsMargins(16, 12, 16, 12)
-        self._ck = {}
+        self._ck = dict(self._flow_ck)
         grid = QGridLayout(); grid.setSpacing(8)
         ck_specs = [
             ('auto_id', '自动识别身份证号(18/15位,带校验码)', True),
@@ -829,6 +842,11 @@ class MainWindow(OrganizeMixin, QMainWindow):
                                   cmb.parentWidget().findChild(QCheckBox).isChecked()))
         return rules
 
+    def _sync_flow_ck(self):
+        on = self._unit_mode() == 'category'
+        for cb in self._flow_ck.values():
+            cb.setEnabled(on)
+
     # ---------- 配置 ----------
 
     def _gather_cfg(self):
@@ -935,7 +953,7 @@ class MainWindow(OrganizeMixin, QMainWindow):
 
     _PHASES = {'extract': ('解压', 0, 0.5), 'classify': ('匹配', 0.5, 0.2),
                'scan': ('扫描', 0.0, 0.15), 'health': ('体检', 0.15, 0.45),
-               'place': ('归档', 0.7, 0.3)}
+               'place': ('归档', 0.7, 0.3), 'accounts': ('账户汇总', 0.0, 1.0)}
 
     def _on_progress(self, phase, cur, total):
         """可在任意线程调用:只记下最新进度,由主线程定时刷新。"""

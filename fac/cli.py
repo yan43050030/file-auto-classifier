@@ -57,6 +57,11 @@ def build_parser():
     p.add_argument('--no-short-names', action='store_true',
                    help='不精简文件名(默认精简为「【单位】信息_姓名_证号」,'
                         '原名记入文件名对照表)')
+    p.add_argument('--no-account-summary', action='store_true',
+                   help='不生成账户汇总表(默认在每人「银行流水」目录生成《账户汇总_姓名.xlsx》:'
+                        '账户数、各账户流水量、当前余额、合计余额)')
+    p.add_argument('--no-tidy-flows', action='store_true',
+                   help='不生成流水整理版(默认每份流水另存整理版到「银行流水/流水整理版」)')
     p.add_argument('--empty-kb', type=int, default=10, metavar='KB',
                    help='疑似空值的大小阈值(KB),默认 10')
     p.add_argument('--unit-mode', choices=['category', 'subfolder', 'prefix', 'none'],
@@ -260,6 +265,8 @@ def main(argv=None):
         auto_company=not args.no_auto_company,
         empty_detect=not args.no_empty_detect, empty_max_kb=args.empty_kb,
         short_names=not args.no_short_names,
+        account_summary=not args.no_account_summary,
+        tidy_flows=not args.no_tidy_flows,
         unit_mode=args.unit_mode,
         content_match=args.content_match, split_excel=args.split_excel,
         dedup=args.dedup,

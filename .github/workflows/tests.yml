@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest pyzipper py7zr rarfile send2trash \
                       openpyxl python-docx pdfplumber xlrd xlwt olefile \
-                      PySide6
+                      PySide6 pandas lxml
 
       - name: 运行单元测试(含界面无头冒烟)
         env:

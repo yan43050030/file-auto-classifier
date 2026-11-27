@@ -52,6 +52,7 @@ jobs:
             --collect-all ttkbootstrap --collect-all tkinterdnd2 \
             --hidden-import multivolumefile --hidden-import inflate64 \
             --hidden-import pybcj --hidden-import pyppmd \
+            --hidden-import lxml.etree --hidden-import lxml.html \
             文件自动分类工具.py
           ls -l dist/
 
