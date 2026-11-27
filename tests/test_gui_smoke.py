@@ -36,7 +36,7 @@ def test_window_builds(win):
     assert win.windowTitle()
     assert win.cmb_mode.count() == 2
     assert win.cmb_mode.currentData() == 'person'      # 默认按人归档
-    assert win.btn_run.text().endswith('开始分类')
+    assert win.btn_run.text().endswith('开始归档')
 
 
 def test_mode_switch_updates_button(win):
@@ -44,7 +44,11 @@ def test_mode_switch_updates_button(win):
     assert win._mode() == 'organize'
     assert win.btn_run.text().endswith('开始整理')
     win.cmb_mode.setCurrentIndex(0)
-    assert win.btn_run.text().endswith('开始分类')
+    assert win.btn_run.text().endswith('开始归档')
+    win.btn_mode_org.click()                         # 顶部大按钮切换
+    assert win._mode() == 'organize' and win.btn_mode_org.isChecked()
+    win.btn_mode_person.click()
+    assert win._mode() == 'person' and not win.btn_mode_org.isChecked()
 
 
 def test_organize_options_from_ui(win, tmp_path):
@@ -339,15 +343,49 @@ def test_empty_detect_option_roundtrip(win):
     assert win.spin_emptykb.value() == 8
 
 
-def test_out_fixed_keeps_library_dir(win, tmp_path):
+def test_library_dir_chosen_is_remembered(win, tmp_path, monkeypatch):
+    """归档库「更换…」选过之后一直记住;清空路径 = 恢复跟随最后添加的材料。"""
+    from PySide6.QtWidgets import QFileDialog
     a = tmp_path / 'A'; a.mkdir(); (a / '1.zip').write_bytes(b'PK')
-    win.txt_out.setText(str(tmp_path / '归档库'))
-    win.ck_out_fixed.setChecked(True)
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory',
+                        lambda *x, **k: str(tmp_path / '归档库'))
+    win._choose_out('person')
     win._add_input(str(a / '1.zip'))
-    assert win.txt_out.text() == str(tmp_path / '归档库')       # 固定不动
-    assert win._gather_cfg()['out_fixed'] is True
-    win.ck_out_fixed.setChecked(False)                          # 取消 → 恢复跟随
-    assert win.txt_out.text() == os.path.join(str(a), '分类结果')
+    assert win.txt_lib.text() == str(tmp_path / '归档库')        # 固定不动
+    cfg = win._gather_cfg()
+    assert cfg['out_fixed'] is True and cfg['out_dir'] == str(tmp_path / '归档库')
+    win.txt_lib.setText('')
+    win.txt_lib.textEdited.emit('')                               # 用户清空
+    assert win.txt_lib.text() == os.path.join(str(a), '分类结果')
+
+
+def test_paths_are_separate_per_mode(win, tmp_path):
+    """归档库和整理结果分开记,切换模式不会互相覆盖。"""
+    a = tmp_path / 'A'; a.mkdir()
+    win.txt_lib.setText(str(tmp_path / '归档库')); win._manual['person'] = True
+    win._add_input(str(a))
+    assert win.txt_out is win.txt_lib
+    win.cmb_mode.setCurrentIndex(1)
+    assert win.txt_out is win.txt_org and '整理结果_' in win.txt_org.text()
+    win.txt_org.setText(str(tmp_path / '整理到这'))
+    win.txt_org.textEdited.emit(str(tmp_path / '整理到这'))
+    win.cmb_mode.setCurrentIndex(0)
+    assert win.txt_out.text() == str(tmp_path / '归档库')
+    cfg = win._gather_cfg()
+    assert cfg['org_out_dir'] == str(tmp_path / '整理到这') and cfg['org_out_fixed'] is True
+    win.txt_lib.setText(''); win.txt_org.setText('')
+    win._apply_cfg(cfg)
+    assert win.txt_lib.text() == str(tmp_path / '归档库')
+    assert win.txt_org.text() == str(tmp_path / '整理到这')
+
+
+def test_old_config_out_dir_goes_to_matching_mode(win, tmp_path):
+    """旧配置只有一个 out_dir:按人归档时就是归档库;上次在文件整理模式则给整理结果。"""
+    win._apply_cfg({'out_dir': 'D:/lib', 'work_mode': 'person'})
+    assert win.txt_lib.text() == 'D:/lib' and win.txt_org.text() == ''
+    win.txt_lib.setText('')
+    win._apply_cfg({'out_dir': 'E:/org', 'work_mode': 'organize'})
+    assert win.txt_org.text() == 'E:/org'
 
 
 def test_default_layout_is_category(win):
@@ -380,14 +418,20 @@ def test_every_option_has_tooltip(win):
         assert getattr(win, attr).toolTip(), attr
 
 
-def test_mode_banner_and_button_color(win):
+def test_mode_cards_and_button_color(win):
     win.cmb_mode.setCurrentIndex(0)
-    assert '按人归档' in win.lbl_banner.text() and '按人归档' in win.windowTitle()
+    assert win.btn_mode_person.isChecked() and '按人归档' in win.windowTitle()
     assert win.btn_run.property('mode') == 'person'
+    assert win._stack_out.currentIndex() == 0 and win._stack_settings.currentIndex() == 0
+    assert win.btn_sync.isVisibleTo(win) and win.btn_add_archives.isVisibleTo(win)
     win.cmb_mode.setCurrentIndex(1)
-    assert '文件整理' in win.lbl_banner.text() and '文件整理' in win.windowTitle()
+    assert win.btn_mode_org.isChecked() and '文件整理' in win.windowTitle()
     assert win.btn_run.property('mode') == 'organize'
     assert win.btn_run.toolTip().startswith('文件整理')
+    # 只显示文件整理用得到的
+    assert win._stack_out.currentIndex() == 1 and win._stack_settings.currentIndex() == 1
+    assert not win.btn_add_archives.isVisibleTo(win) and not win.btn_pw.isVisibleTo(win)
+    assert win.btn_undo.isVisibleTo(win) and not win.btn_sync.isVisibleTo(win)
 
 
 def test_short_names_option(win):
@@ -402,8 +446,8 @@ def test_drop_anywhere_in_window_adds_inputs(win, app, tmp_path):
     from PySide6.QtCore import QMimeData, QUrl, QPoint, QPointF, Qt
     from PySide6.QtGui import QDragEnterEvent, QDropEvent
     win.show()
-    targets = [win.log, win.txt_roster, win.txt_out, win._tabs, win.lbl_banner,
-               win.txt_pwfile]
+    targets = [win.log, win.txt_roster, win.txt_out, win._stack_settings,
+               win.btn_mode_person, win.txt_pwfile, win.lbl_result]
     for i, w in enumerate(targets):
         f = tmp_path / f'包{i}.zip'
         f.write_bytes(b'PK')
@@ -421,9 +465,13 @@ def test_drop_anywhere_in_window_adds_inputs(win, app, tmp_path):
     assert win.txt_out.text() != str(tmp_path / '包2.zip')
 
 
-def test_password_file_in_output_area(win):
-    # 密码本输入框在「② 保存到」区域,和同步按钮在一起
-    assert win.txt_pwfile.parentWidget() is win.btn_sync.parentWidget()
+def test_password_button_shows_file(win, tmp_path):
+    # 密码本按钮在「① 材料」区,上面直接显示用的是哪个文件
+    assert win.btn_pw.isVisibleTo(win)
+    win.txt_pwfile.setText(str(tmp_path / '密码.txt'))
+    assert '密码.txt' in win.btn_pw.text()
+    win.txt_pwfile.setText('')
+    assert win.btn_pw.text() == '🔑 密码本…'
 
 
 def test_txt_password_option_off_and_migrated(win, tmp_path, monkeypatch):
@@ -473,9 +521,8 @@ def test_accounts_button_on_existing_library(win, app, tmp_path, monkeypatch):
     d = tmp_path / 'lib' / '张三' / '银行流水'
     d.mkdir(parents=True)
     (d / '建设银行.xlsx').write_bytes(ccb_xlsx())
-    monkeypatch.setattr(QFileDialog, 'getExistingDirectory',
-                        lambda *a, **k: str(tmp_path / 'lib'))
     monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.Yes)
+    win.txt_lib.setText(str(tmp_path / 'lib'))       # 直接用上面显示的归档库,不再另选
     done = {}
     monkeypatch.setattr(win, '_on_accounts_done', lambda path, res: done.update(res))
     win._flow_ck['tidy_flows'].setChecked(False)
@@ -488,3 +535,170 @@ def test_accounts_button_on_existing_library(win, app, tmp_path, monkeypatch):
     assert (d / '账户汇总_张三.xlsx').is_file()
     assert not (d / '流水整理版').exists()
     assert sorted(x.name for x in d.iterdir()) == ['建设银行.xlsx', '账户汇总_张三.xlsx']
+
+
+def _wait(app, cond, sec=30):
+    import time
+    t0 = time.time()
+    while not cond() and time.time() - t0 < sec:
+        app.processEvents()
+        time.sleep(0.02)
+
+
+def test_accounts_menu_other_folder(win, app, tmp_path, monkeypatch):
+    """按钮右边小箭头 →「其他放流水的文件夹…」。"""
+    pytest.importorskip('pandas')
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from flow_samples import icbc_csv
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    d = tmp_path / '流水资料'; d.mkdir()
+    (d / '工商银行.csv').write_bytes(icbc_csv())
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory', lambda *a, **k: str(d))
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.Yes)
+    done = {}
+    monkeypatch.setattr(win, '_on_accounts_done', lambda path, res: done.update(res))
+    acts = [a.text() for a in win.btn_accounts.menu().actions()]
+    assert acts == ['整个归档库', '只做某个人…', '其他放流水的文件夹…']
+    win.btn_accounts.menu().actions()[2].trigger()
+    _wait(app, lambda: done)
+    assert done['kind'] == 'plain' and (d / '账户汇总_流水资料.xlsx').is_file()
+
+
+def test_accounts_without_library_explains(win, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    shown = []
+    monkeypatch.setattr(QMessageBox, 'information', lambda *a, **k: shown.append(a[-1]))
+    win.txt_lib.setText('')
+    win._accounts_only()
+    assert shown and '归档库还不存在' in shown[-1]
+
+
+def test_every_checkbox_reaches_joboptions(win, tmp_path, monkeypatch):
+    """界面上(含对话框里)每个按人归档的勾选、数值都真正传到了 JobOptions。"""
+    import fac.gui as G
+    seen = {}
+
+    def fake_run_job(opts, *a, **k):
+        seen['opts'] = opts
+    monkeypatch.setattr(G, 'run_job', fake_run_job)
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.Yes)
+    (tmp_path / 'a.zip').write_bytes(b'PK')
+    win._add_input(str(tmp_path / 'a.zip'))
+    win.txt_lib.setText(str(tmp_path / 'lib'))
+    flips = {k: not cb.isChecked() for k, cb in win._ck.items()}
+    for k, v in flips.items():
+        win._ck[k].setChecked(v)
+    win._set_unit_mode('category')
+    win.spin_emptykb.setValue(23)
+    win.spin_minfreq.setValue(7)
+    win.txt_iexclude.setText('甲专案,乙工程')
+    win._rb_multi.button(1).setChecked(True)
+    win.ck_short.setChecked(False)
+    win.txt_roster.setPlainText('张三\n李四,李小四\n')
+    win._start()
+    import threading, time
+    t0 = time.time()
+    while 'opts' not in seen and time.time() - t0 < 5:
+        time.sleep(0.02)
+    o = seen['opts']
+    for k, v in flips.items():
+        assert getattr(o, k) is v, k
+    assert o.empty_max_kb == 23 and o.intelligent_min_freq == 7
+    assert o.intelligent_exclude == ['甲专案', '乙工程']
+    assert o.copy_to_each is True and o.short_names is False
+    assert len(o.roster) == 2 and o.unit_mode == 'category'
+    assert o.out_dir == str(tmp_path / 'lib')
+
+
+def test_unit_mode_disables_flow_options(win):
+    win._set_unit_mode('subfolder')
+    assert not win._flow_ck['account_summary'].isEnabled()
+    win._set_unit_mode('category')
+    assert win._flow_ck['account_summary'].isEnabled()
+
+
+def test_roster_summary_counts_library_people(win, tmp_path):
+    from fac.library import LEDGER_NAME
+    lib = tmp_path / 'lib'; lib.mkdir()
+    (lib / LEDGER_NAME).write_text('', encoding='utf-8')
+    for n in ('张三_110101199003078515', '某某科技有限公司', '未分类'):
+        (lib / n).mkdir()
+    win.txt_lib.setText(str(lib))
+    win._refresh_lib_info()
+    assert '2 个人员/企业' in win.lbl_lib_info.text()
+    assert '归档库已有 <b>2</b> 人' in win.lbl_roster_sum.text()
+    win.txt_roster.setPlainText('王五,王小五\n')
+    assert '名单 <b>1</b> 人' in win.lbl_roster_sum.text()
+    win.txt_roster.setPlainText('王五,王小五\n张三\n')         # 名单里也有的不重复算
+    assert '归档库已有 <b>1</b> 人' in win.lbl_roster_sum.text()
+    assert win.lbl_roster_names.text().count('张三') == 1
+    win.txt_roster.setPlainText('王五,王小五\n')
+    assert '王五(王小五)' in win.lbl_roster_names.text()
+    win._ck['lib_roster'].setChecked(False)
+    assert '归档库已有' not in win.lbl_roster_sum.text()
+
+
+def test_dialogs_hold_their_controls(win):
+    """名单 / 更多设置 / 规则都在对话框里,控件照常存在。"""
+    assert win.txt_roster.window() is win._dlg_roster
+    assert win.txt_pwfile.window() is win._dlg_more
+    assert win.spin_emptykb.window() is win._dlg_more
+    assert win._ck['content_match'].window() is win._dlg_more
+    assert win.spin_mindup.window() is win._dlg_more_org
+    assert win._rule_area.window() is win._dlg_rules
+
+
+def test_rules_roundtrip_and_count(win):
+    win._add_rule()
+    _ck, cmb, val, tgt = win._rule_rows[-1]
+    cmb.setCurrentIndex(cmb.findData('ext')); val.setText('pdf'); tgt.setText('PDF')
+    win._refresh_rule_buttons()
+    assert all('1 条' in b.text() for b in win._rule_btns)
+    cfg = win._gather_cfg()
+    win._apply_cfg(cfg)
+    win._apply_cfg(cfg)                    # 加载两次也不叠加
+    assert len(win._get_rules()) == 1 and win._get_rules()[0].value == 'pdf'
+
+
+def test_result_bar_after_person_job(win, tmp_path):
+    (tmp_path / '未分类').mkdir()
+    rep = tmp_path / '反馈核对表.xlsx'; rep.write_bytes(b'x')
+    win.txt_lib.setText(str(tmp_path))
+    from PySide6.QtWidgets import QMessageBox
+    import unittest.mock as um
+    with um.patch.object(QMessageBox, 'information'):
+        win._on_done({'files': 126, 'reimport_skipped': 0, 'empty': 14,
+                      'stats': {'张三': 3, '李四': 2, '未分类': 3},
+                      'account_summaries': ['a', 'b'], 'reports': [str(rep)]})
+    t = win.lbl_result.text()
+    assert '126' in t and '2</b> 人/企业' in t and '3</b> 未分类' in t and '2</b> 份账户汇总' in t
+    assert win.btn_res_unclassified.isVisibleTo(win) and win.btn_res_report.isVisibleTo(win)
+
+
+def test_log_toggle(win):
+    assert not win.log.isVisibleTo(win)
+    win.btn_log.setChecked(True)
+    assert win.log.isVisibleTo(win) and win._gather_cfg()['log_open'] is True
+
+
+def test_sync_button_on_library(win, app, tmp_path, monkeypatch):
+    """「🔄 同步归档记录」作用于上面显示的归档库。"""
+    import zipfile
+    from fac.pipeline import JobOptions, run_job
+    from fac.roster import Roster
+    src = tmp_path / 'in'; src.mkdir()
+    with zipfile.ZipFile(src / '建设银行.zip', 'w') as z:
+        z.writestr('张三_流水.xlsx', 'a')
+    lib = tmp_path / 'lib'
+    run_job(JobOptions([str(src)], str(lib), Roster.from_text('张三'), intelligent=False,
+                       unit_mode='category'), lambda m: None, lambda *a: None, lambda *a: None)
+    f = next(lib.rglob('*张三_流水.xlsx'))
+    f.rename(f.with_name('张三_流水_已看.xlsx'))                # 手动改名
+    from PySide6.QtWidgets import QMessageBox
+    shown = []
+    monkeypatch.setattr(QMessageBox, 'information', lambda *a, **k: shown.append(a[-1]))
+    win.txt_lib.setText(str(lib))
+    win._sync_library()
+    _wait(app, lambda: shown)
+    assert shown and '改名过的 1 个' in shown[-1]

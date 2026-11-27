@@ -64,6 +64,8 @@ def build_parser():
     p.add_argument('--no-account-summary', action='store_true',
                    help='不生成账户汇总表(默认在每人「银行流水」目录生成《账户汇总_姓名.xlsx》:'
                         '账户数、各账户流水量、当前余额、合计余额)')
+    p.add_argument('--no-lib-roster', action='store_true',
+                   help='归档库里已有的人员/企业不自动算进名单(默认算:只写了姓名的新文件也能并进原文件夹)')
     p.add_argument('--no-tidy-flows', action='store_true',
                    help='不生成流水整理版(默认每份流水另存整理版到「银行流水/流水整理版」)')
     p.add_argument('--empty-kb', type=int, default=10, metavar='KB',
@@ -283,6 +285,7 @@ def main(argv=None):
         short_names=not args.no_short_names,
         account_summary=not args.no_account_summary,
         tidy_flows=not args.no_tidy_flows,
+        lib_roster=not args.no_lib_roster,
         unit_mode=args.unit_mode,
         content_match=args.content_match, split_excel=args.split_excel,
         dedup=args.dedup,

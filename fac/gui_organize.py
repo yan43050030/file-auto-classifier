@@ -281,6 +281,6 @@ class OrganizeMixin:
             lines.append(f'· 失败 {summary["failed"]} 个(见日志)')
         if summary.get('reports'):
             lines.append('· 已生成整理报告(类型/年份/占用/最大文件)')
-        lines.append('\n如果结果不满意,点「文件整理」页的'
-                     '「撤销上次整理」即可全部还原。')
+        lines.append('\n如果结果不满意,点「② 结果放到」里的'
+                     '「↩ 撤销上次整理」即可全部还原。')
         QMessageBox.information(self, '完成', '\n'.join(lines))

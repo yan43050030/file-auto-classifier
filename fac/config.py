@@ -21,6 +21,9 @@ DEFAULTS = {
     'short_names': True,         # 精简文件名(【单位】信息_姓名_证号)
     'account_summary': True,     # 银行流水目录生成《账户汇总_姓名.xlsx》
     'tidy_flows': True,          # 每份流水另存整理版(银行流水/流水整理版)
+    'lib_roster': True,          # 归档库里已有的人自动算进名单
+    'org_out_dir': '',           # 文件整理的结果目录(和归档库分开记)
+    'org_out_fixed': False,
     'layout_v46': True,          # 已完成 V4.6 布局迁移的标记
     'pw_txt_v502': True,         # 已完成 V5.0.2 "txt 不默认当密码本" 迁移的标记
     'preview': True,             # 试运行预览(先看清单再执行),默认开更稳妥

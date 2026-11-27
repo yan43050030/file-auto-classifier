@@ -25,11 +25,17 @@ QGroupBox::title {{
     color: {TEXT};
 }}
 QPushButton {{
-    border: 1px solid {BORDER}; border-radius: 7px; padding: 6px 18px;
+    border: 1px solid {BORDER}; border-radius: 7px; padding: 6px 12px;
     min-height: 22px;
     background: {CARD_BG}; color: {TEXT}; font-size: 13px;
 }}
 QPushButton:hover {{ border-color: {PRIMARY}; color: {PRIMARY}; }}
+QToolButton {{
+    border: 1px solid {BORDER}; border-radius: 7px; padding: 6px 12px; padding-right: 26px;
+    min-height: 22px; background: {CARD_BG}; color: {TEXT}; font-size: 13px;
+}}
+QToolButton:hover {{ border-color: {PRIMARY}; color: {PRIMARY}; }}
+QToolButton::menu-button {{ border: none; border-left: 1px solid {BORDER}; width: 20px; }}
 QPushButton#btnRun {{
     background: {PRIMARY}; color: white; border: none; font-size: 16px;
     font-weight: 600; padding: 10px 32px;

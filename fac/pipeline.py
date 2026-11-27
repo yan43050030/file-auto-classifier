@@ -49,7 +49,7 @@ class JobOptions:
                  intelligent_min_freq=10, intelligent_exclude=None,
                  auto_company=True, empty_detect=False,
                  empty_max_kb=DEFAULT_MAX_KB, short_names=False,
-                 account_summary=False, tidy_flows=False):
+                 account_summary=False, tidy_flows=False, lib_roster=False):
         self.inputs = list(inputs)
         self.out_dir = out_dir
         self.roster = roster
@@ -80,6 +80,9 @@ class JobOptions:
         # (界面/命令行/配置默认开启;库接口默认关闭以保持旧行为)
         self.account_summary = account_summary
         self.tidy_flows = tidy_flows
+        # 归档库里已有的人员 / 企业自动算进名单(只写了姓名的新文件也能并进去)
+        # (界面/命令行/配置默认开启;库接口默认关闭以保持旧行为)
+        self.lib_roster = lib_roster
 
 
 class PlanItem:
@@ -376,6 +379,12 @@ def run_job(opts: JobOptions, log, progress, ask_password,
 
     tmp = None
     try:
+        if opts.lib_roster and lib.has_existing:
+            opts.roster, n = _roster_with_library(opts.roster, lib)
+            if n:
+                tee(f'归档库里已有的 {n} 个人员/企业已自动算进名单'
+                    f'(文件名只写了姓名的新文件也能并进原文件夹)。')
+
         # ---- 1. 收集输入(压缩包 + 非压缩包直接文件)与密码本 ----
         got = _collect_inputs(opts.inputs, opts.auto_pw_txt, tee, opts.out_dir)
         archives, txt_paths = got.archives, got.txt_paths
@@ -768,6 +777,35 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                 pass
         if done_cb:
             done_cb(summary)
+
+
+def library_people(lib_or_dir):
+    """归档库里已有的人员 / 企业:[(名称, 证号或信用代码)]。只有证号、没有名称的不算
+    (证号本来就会自动识别);同名的几个人都不算(只凭姓名分不清是谁)。"""
+    lib = lib_or_dir if isinstance(lib_or_dir, Library) else Library(lib_or_dir)
+    people = []
+    for folder in sorted(lib.existing):
+        name, code = parse_folder(folder)
+        if not name or len(name) < 2 or name in SPECIAL_FOLDERS:
+            continue
+        people.append((name, code))
+    counts = {}
+    for name, _c in people:
+        counts[name] = counts.get(name, 0) + 1
+    return [(n, c) for n, c in people if counts[n] == 1]
+
+
+def _roster_with_library(roster, lib):
+    """名单 + 归档库里已有的人(名单里已经写了的不重复加)。返回 (新名单, 加了几个)。"""
+    from .roster import Roster, Person
+    known_names = {p.name for p in roster.persons} | \
+        {a for p in roster.persons for a in p.aliases}
+    known_ids = {i for p in roster.persons for i in p.ids}
+    extra = [Person(n, [c] if c else []) for n, c in library_people(lib)
+             if n not in known_names and not (c and c in known_ids)]
+    if not extra:
+        return roster, 0
+    return Roster(list(roster.persons) + extra), len(extra)
 
 
 def _flow_reports(folders, opts, tee, progress, ck, summary):

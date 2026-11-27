@@ -373,3 +373,36 @@ def test_reimport_of_extracted_folder_matches_archive_import(tmp_path):
     assert res['reimport_skipped'] == 1
     assert len(list((out / '张三').rglob('*交易流水*'))) == 1
     assert not (b / '建设银行').exists()                    # 原处清空,备份里有
+
+
+def test_library_people_count_as_roster(tmp_path):
+    """第二次导入名单为空:只写了姓名的文件也能并进归档库里原来的「张三_证号」。"""
+    a = tmp_path / 'a'; a.mkdir()
+    with zipfile.ZipFile(a / '建设银行.zip', 'w') as z:
+        z.writestr(f'张三_{ID_A}_流水.xlsx', 'a')
+        z.writestr(f'王五_{ID_B}_流水.xlsx', 'b')
+    out = tmp_path / 'out'
+    run(JobOptions([str(a)], str(out), Roster.from_text(ROSTER), intelligent=False,
+                   unit_mode='category'))
+    assert (out / f'张三_{ID_A}').is_dir()
+    b = tmp_path / 'b'; b.mkdir()
+    with zipfile.ZipFile(b / '工商银行.zip', 'w') as z:
+        z.writestr('张三_工商银行.xlsx', 'c')
+    # 默认(库接口)不加:进未分类
+    run(JobOptions([str(b)], str(out), Roster([]), intelligent=False, unit_mode='category'))
+    assert list((out / '未分类').rglob('*张三_工商银行*'))
+    out2 = tmp_path / 'out2'
+    run(JobOptions([str(a)], str(out2), Roster.from_text(ROSTER), intelligent=False,
+                   unit_mode='category'))
+    logs, _ = run(JobOptions([str(b)], str(out2), Roster([]), intelligent=False,
+                             unit_mode='category', lib_roster=True))
+    assert any('自动算进名单' in m for m in logs)
+    assert list((out2 / f'张三_{ID_A}').rglob('*张三_工商银行*'))
+    assert not (out2 / '未分类').exists()
+
+
+def test_library_people_skips_duplicate_names(tmp_path):
+    from fac.pipeline import library_people
+    for n in (f'张三_{ID_A}', f'张三_{ID_B}', '李四', '未分类', ID_A):
+        (tmp_path / n).mkdir()
+    assert library_people(str(tmp_path)) == [('李四', '')]
