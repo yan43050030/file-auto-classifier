@@ -304,3 +304,72 @@ def test_file_without_name_uses_folder_or_archive_name(tmp_path):
     assert list((out / f'张三_{ID_A}').rglob('*工商银行.xlsx'))
     assert list((out / f'李四_{ID_B}').rglob('*建设银行.xlsx'))
     assert list((out / '未分类').rglob('*农业银行.xlsx'))
+
+
+def _messy(tmp_path):
+    """之前自己解压、乱放的案件材料。"""
+    src = tmp_path / '案件材料'
+    (src / '建设银行反馈' / '张三').mkdir(parents=True)
+    (src / '张三' / '工商银行').mkdir(parents=True)
+    (src / '某某查询结果').mkdir()
+    (src / '建设银行反馈' / '张三' / '交易流水.xlsx').write_text('a', encoding='utf-8')
+    (src / '张三' / '工商银行' / '查询结果.xlsx').write_text('b', encoding='utf-8')
+    (src / '张三_出入境记录.txt').write_text('c', encoding='utf-8')
+    (src / '某某查询结果' / '李四_户籍.txt').write_text('d', encoding='utf-8')
+    (src / '张三' / 'Thumbs.db').write_text('x', encoding='utf-8')
+    with zipfile.ZipFile(src / '某某查询结果.zip', 'w') as z:     # 已经解压过的包
+        z.writestr('李四_户籍.txt', 'd')
+    return src
+
+
+def test_messy_extracted_folder_is_tidied_with_backup(tmp_path):
+    src = _messy(tmp_path)
+    out = src / '分类结果'                      # 默认输出目录就在所选文件夹里
+    logs, res = run(JobOptions([str(src)], str(out), Roster.from_text('张三\n李四'),
+                               intelligent=False, unit_mode='category', short_names=True))
+    zs, ls = out / '张三', out / '李四'
+    # 来源单位取自路径里的来源文件夹;人名可以在上层文件夹里
+    assert (zs / '银行流水' / '【建设银行反馈】交易流水_张三.xlsx').is_file()
+    assert (zs / '银行流水' / '【工商银行】查询结果_张三.xlsx').is_file()
+    assert list((ls / '其他数据').glob('【某某查询结果】*户籍*'))
+    assert not (out / '未分类').exists()
+    # 原文件按原结构备份,原处只剩结果目录和备份
+    bk = [d for d in src.iterdir() if d.name.startswith('原文件备份_')]
+    assert len(bk) == 1 and res['backups'] == [str(bk[0])]
+    assert (bk[0] / '建设银行反馈' / '张三' / '交易流水.xlsx').read_text(encoding='utf-8') == 'a'
+    assert (bk[0] / '某某查询结果.zip').is_file()               # 已解压过的包不再解,收进备份
+    assert (bk[0] / '张三' / 'Thumbs.db').is_file()
+    assert sorted(x.name for x in src.iterdir()) == sorted(['分类结果', bk[0].name])
+    # 结果目录在输入文件夹里:再跑一次不会把归档库自己当材料
+    logs, res = run(JobOptions([str(src)], str(out), Roster.from_text('张三\n李四'),
+                               intelligent=False, unit_mode='category', short_names=True))
+    assert not (out / '未分类').exists()
+    assert len(list(out.glob('分类日志_*.txt'))) >= 1 and not list(out.rglob('*【*】分类日志*'))
+
+
+def test_archive_library_as_input_is_refused(tmp_path):
+    src = _messy(tmp_path)
+    out = tmp_path / 'out'
+    run(JobOptions([str(src)], str(out), Roster.from_text('张三\n李四'), intelligent=False,
+                   unit_mode='category'))
+    logs, _ = run(JobOptions([str(out)], str(tmp_path / 'out2'), Roster.from_text('张三'),
+                             intelligent=False, unit_mode='category'))
+    assert any('是归档库' in m for m in logs)
+    assert (out / '归档记录.jsonl').is_file()
+
+
+def test_reimport_of_extracted_folder_matches_archive_import(tmp_path):
+    """先导入过压缩包,后来又拿到它自己解压的文件夹:单位一致,认得出是同一批,不重复存放。"""
+    a = tmp_path / 'a'; a.mkdir()
+    with zipfile.ZipFile(a / '建设银行.zip', 'w') as z:
+        z.writestr('张三_交易流水.xlsx', 'a')
+    out = tmp_path / 'out'
+    run(JobOptions([str(a)], str(out), Roster.from_text('张三'), intelligent=False,
+                   unit_mode='category'))
+    b = tmp_path / 'b'; (b / '建设银行').mkdir(parents=True)
+    (b / '建设银行' / '张三_交易流水.xlsx').write_text('a', encoding='utf-8')
+    _, res = run(JobOptions([str(b)], str(out), Roster.from_text('张三'), intelligent=False,
+                            unit_mode='category'))
+    assert res['reimport_skipped'] == 1
+    assert len(list((out / '张三').rglob('*交易流水*'))) == 1
+    assert not (b / '建设银行').exists()                    # 原处清空,备份里有

@@ -1342,6 +1342,12 @@ class MainWindow(OrganizeMixin, QMainWindow):
             msg += f'\n{summary["failed"]} 个包解压失败,见「解压失败」。'
         if summary.get('reports'):
             msg += '\n已生成反馈核对表。'
+        if summary.get('account_summaries'):
+            msg += f'\n已生成账户汇总表 {len(summary["account_summaries"])} 份。'
+        if summary.get('backups'):
+            msg += ('\n\n散放的原文件已按原来的文件夹结构备份在:\n'
+                    + '\n'.join(summary['backups'])
+                    + '\n确认新分的没问题后,可手动删除备份文件夹。')
         QMessageBox.information(self, '完成', msg)
 
     def _ui_call(self, fn):

@@ -20,7 +20,7 @@ from .intelligent import detect_names, build_name_id_map, IntelligentMatcher
 from .company import build_company_map, CompanyMatcher, known_names_from_files
 from .emptyfile import empty_reason, BUCKET_EMPTY, DEFAULT_MAX_KB
 from .doctype import detect_category, is_bank_related, is_bank_flow, is_pboc, CAT_FLOW
-from .library import Library, SPECIAL_FOLDERS, parse_folder
+from .library import Library, SPECIAL_FOLDERS, LEDGER_NAME, parse_folder
 from .naming import shorten_name, shorten_unit, with_date
 from . import extract as ex
 from .report import write_matrix_report, write_name_map
@@ -112,60 +112,158 @@ class PlanItem:
         return self.via
 
 
-def _collect_inputs(inputs, auto_pw_txt, log):
-    """收集压缩包、非压缩包文件、候选密码本 txt。
-    返回 (archives, loose_files, txt_paths)。
-    loose_files 是 (文件路径, 来源单位) 列表,归类时跟解压出来的文件一视同仁。"""
-    archives, loose_files, txt_paths, txt_dirs = [], [], [], set()
+BACKUP_PREFIX = '原文件备份_'
+_JUNK_FILES = {'thumbs.db', 'desktop.ini', '.ds_store'}
+
+
+def _is_junk(f):
+    return f.lower() in _JUNK_FILES or f.startswith(('~$', '._'))
+
+
+def _looks_like_person(part):
+    """文件夹名像人名 / 证号(「张三」「张三_1101…」),不适合当来源单位。"""
+    return bool(re.fullmatch(r'[\u4e00-\u9fa5·]{2,4}', part) or find_ids(part)
+                or re.search(r'\d{15,18}', part))
+
+
+def _unit_from_path(parts, root_name):
+    """散放材料的来源单位:路径里哪一层写着来源(银行、某某局……)就用哪层;
+    都没写的用第一层不像人名的子文件夹(通常就是当初的压缩包名,和导入压缩包时一致);
+    直接放在所选文件夹里的用所选文件夹名。"""
+    from .doctype import _source_says
+    for x in parts:
+        if _source_says(x):
+            return x
+    for x in parts:
+        if not _looks_like_person(x):
+            return x
+    return root_name
+
+
+def _skip_dir(path, name, out_abs):
+    """遍历输入文件夹时跳过:输出目录 / 归档库、原文件备份、临时目录、流水整理版。"""
+    if name.startswith(('.', BACKUP_PREFIX)) or name == '流水整理版':
+        return True
+    ap = os.path.normcase(os.path.abspath(path))
+    if out_abs and (ap == out_abs or ap.startswith(out_abs + os.sep)):
+        return True
+    return os.path.isfile(os.path.join(path, LEDGER_NAME))
+
+
+class Inputs:
+    """收集结果。loose 每项 (文件路径, 来源单位, 找人用的路径上下文, 所选文件夹)。"""
+
+    def __init__(self):
+        self.archives = []
+        self.loose = []
+        self.txt_paths = []
+        self.pre_extracted = []      # (压缩包, 所选文件夹):旁边已有同名的解压文件夹
+        self.junk = []               # (系统/临时文件, 所选文件夹)
+
+
+def _collect_inputs(inputs, auto_pw_txt, log, out_dir=None):
+    """收集压缩包、非压缩包文件(含之前自己解压、散放的材料)、候选密码本 txt。"""
+    res = Inputs()
+    txt_dirs = set()
+    out_abs = os.path.normcase(os.path.abspath(out_dir)) if out_dir else ''
     for p in inputs:
         if os.path.isdir(p):
-            folder_name = os.path.basename(os.path.abspath(p))
-            has_direct = False
+            root_abs = os.path.abspath(p)
+            if os.path.isfile(os.path.join(p, LEDGER_NAME)):
+                log(f'  [提示] {p} 是归档库(分类结果),不能当输入,已跳过。')
+                continue
+            root_name = os.path.basename(root_abs)
             for root, dirs, files in os.walk(p):
-                # 本工具在归档库里生成的账户汇总表 / 流水整理版不当材料
-                dirs[:] = [d for d in dirs if d != '流水整理版']
-                for f in files:
+                names = set(dirs)
+                dirs[:] = sorted(d for d in dirs
+                                 if not _skip_dir(os.path.join(root, d), d, out_abs))
+                rel = os.path.relpath(root, p)
+                parts = [] if rel == '.' else rel.split(os.sep)
+                unit = _unit_from_path(parts, root_name)
+                ctx = ' '.join(parts + [root_name])
+                for f in sorted(files):
                     if f.startswith('账户汇总_'):
+                        continue
+                    if _is_junk(f):
+                        res.junk.append((os.path.join(root, f), root_abs))
                         continue
                     kind = ex.archive_kind(f)
                     if kind == 'volume-later':
                         continue
                     fp = os.path.join(root, f)
                     if kind:
-                        archives.append(fp)
+                        if ex.unit_name(f) in names and os.listdir(os.path.join(root, ex.unit_name(f))):
+                            res.pre_extracted.append((fp, root_abs))     # 已经解压过
+                        else:
+                            res.archives.append(fp)
                     else:
                         # 非压缩包的直接文件照常分类;txt 同时当候选密码本
                         # (txt 也可能就是反馈材料,不能因为当了密码本就不分类)
                         if auto_pw_txt and f.lower().endswith('.txt'):
-                            txt_paths.append(fp)
-                        loose_files.append((fp, folder_name))
-                        has_direct = True
+                            res.txt_paths.append(fp)
+                        res.loose.append((fp, unit, ctx, root_abs))
         elif os.path.isfile(p) and ex.is_archive(os.path.basename(p)):
             if ex.archive_kind(os.path.basename(p)) == 'volume-later':
                 log(f'  [提示] {os.path.basename(p)} 是分卷的后续卷,'
                     f'将由首卷自动带出,已跳过。')
                 continue
-            archives.append(p)
+            res.archives.append(p)
             if auto_pw_txt:
                 txt_dirs.add(os.path.dirname(p))
         elif os.path.isfile(p):
             # 单独选中的非压缩包文件也直接分类
-            unit = os.path.basename(os.path.dirname(p))
-            loose_files.append((p, unit))
+            d = os.path.dirname(os.path.abspath(p))
+            unit = os.path.basename(d)
+            res.loose.append((p, unit, unit, d))
         else:
             log(f'  [提示] 跳过无法识别的输入: {p}')
     for d in txt_dirs:
         try:
             for f in os.listdir(d):
                 if f.lower().endswith('.txt'):
-                    txt_paths.append(os.path.join(d, f))
+                    res.txt_paths.append(os.path.join(d, f))
         except Exception:
             pass
     seen = set()
-    archives = [x for x in archives if not (x in seen or seen.add(x))]
+    res.archives = [x for x in res.archives if not (x in seen or seen.add(x))]
     seen = set()
-    txt_paths = [x for x in txt_paths if not (x in seen or seen.add(x))]
-    return archives, loose_files, txt_paths
+    res.txt_paths = [x for x in res.txt_paths if not (x in seen or seen.add(x))]
+    return res
+
+
+def _backup_original(src, root, bk_dirs, stamp):
+    """散放的原文件先在「所选文件夹/原文件备份_时间/原相对路径」留一份:
+    同一磁盘用硬链接(不占空间、瞬间完成),不行再复制。返回备份路径,失败返回 None。"""
+    bk_root = bk_dirs.setdefault(root, os.path.join(root, BACKUP_PREFIX + stamp))
+    rel = os.path.relpath(os.path.abspath(src), root)
+    if rel.startswith('..'):
+        rel = os.path.basename(src)
+    dst = os.path.join(bk_root, rel)
+    try:
+        os.makedirs(long_path(os.path.dirname(dst)), exist_ok=True)
+        if os.path.exists(long_path(dst)):
+            dst = unique_path(os.path.dirname(dst), os.path.basename(dst))
+        try:
+            os.link(long_path(src), long_path(dst))
+        except OSError:
+            shutil.copy2(long_path(src), long_path(dst))
+        return dst
+    except OSError:
+        return None
+
+
+def _prune_empty_dirs(root, keep):
+    """把搬空了的子文件夹删掉(所选文件夹本身、备份、输出目录不动)。"""
+    keep = {os.path.normcase(os.path.abspath(k)) for k in keep}
+    for d, _dirs, _files in sorted(os.walk(root), key=lambda x: -len(x[0])):
+        ad = os.path.normcase(os.path.abspath(d))
+        if ad in keep or any(ad.startswith(k + os.sep) for k in keep):
+            continue
+        try:
+            if not os.listdir(d):
+                os.rmdir(d)
+        except OSError:
+            pass
 
 
 def run_job(opts: JobOptions, log, progress, ask_password,
@@ -279,19 +377,26 @@ def run_job(opts: JobOptions, log, progress, ask_password,
     tmp = None
     try:
         # ---- 1. 收集输入(压缩包 + 非压缩包直接文件)与密码本 ----
-        archives, loose_files, txt_paths = _collect_inputs(
-            opts.inputs, opts.auto_pw_txt, tee)
+        got = _collect_inputs(opts.inputs, opts.auto_pw_txt, tee, opts.out_dir)
+        archives, txt_paths = got.archives, got.txt_paths
+        loose_files = got.loose
+        if got.pre_extracted:
+            tee(f'有 {len(got.pre_extracted)} 个压缩包旁边已有同名的解压文件夹,视为已解压过,'
+                f'直接用文件夹里的文件,不再重复解压。')
+        if got.junk:
+            tee(f'跳过 {len(got.junk)} 个系统 / 临时文件(Thumbs.db、desktop.ini、~$ 开头的 Office 临时文件等)。')
         # 你专门指定的密码本文件不当作材料归档
         pw_abs = {os.path.normcase(os.path.abspath(p)) for p in opts.pw_files}
-        loose_files = [(fp, u) for fp, u in loose_files
-                       if os.path.normcase(os.path.abspath(fp)) not in pw_abs]
+        loose_files = [x for x in loose_files
+                       if os.path.normcase(os.path.abspath(x[0])) not in pw_abs]
         txt_paths = list(opts.pw_files) + \
             [t for t in txt_paths if t not in opts.pw_files]
         if not archives and not loose_files:
             tee('未找到任何压缩包或文件。请检查所选路径。')
             return
         if loose_files:
-            tee(f'发现 {len(loose_files)} 个非压缩包文件,将直接分类(不经过解压)。')
+            tee(f'发现 {len(loose_files)} 个非压缩包文件(含之前已解压、散放的材料),将直接分类'
+                f'(不经过解压);原文件归档前会先在所选文件夹的「{BACKUP_PREFIX}…」里留一份备份。')
         if not archives:
             tee('未找到压缩包,将仅对直接文件分类。')
 
@@ -356,9 +461,11 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                     all_files.append((fp, f, unit))
                     ctx_of[fp] = ' '.join(x for x in (rel_dir if rel_dir != '.' else '', unit) if x)
         # 非压缩包的直接文件也加入分类
-        for fp, unit in loose_files:
+        loose_root = {}
+        for fp, unit, ctx, root in loose_files:
             all_files.append((fp, os.path.basename(fp), unit))
-            ctx_of[fp] = ' '.join(x for x in (os.path.basename(os.path.dirname(fp)), unit) if x)
+            ctx_of[fp] = ' '.join(x for x in (ctx, unit) if x)
+            loose_root[fp] = root
 
         # 内容匹配对"名单 + 智能识别 + 证号兜底"都有用,不再要求名单非空
         use_content = opts.content_match
@@ -528,10 +635,28 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         # ---- 5. 执行归档 ----
         tee('开始归档文件...')
         lib.apply_renames()
+        stamp = f'{datetime.datetime.now():%Y%m%d_%H%M%S}'
+        bk_dirs = {}            # 所选文件夹 → 原文件备份目录
+        n_loose = 0
         for i, item in enumerate(plan, 1):
             ck()
             progress('place', i, len(plan))
+            root = loose_root.get(item.src)
+            bk = None
+            if root:
+                # 之前自己解压、散放的原文件:先留备份再搬,分错了可以从备份找回
+                bk = _backup_original(item.src, root, bk_dirs, stamp)
+                if bk is None:
+                    tee(f'  [提示] {item.fname} 备份失败,为稳妥起见原文件留在原处,只复制一份归档')
             try:
+                if root and bk is None:
+                    autos = item.auto_targets or item.targets
+                    for j, t in enumerate(item.targets if item.action != 'split' else []):
+                        place(item.src, item.fname, item.unit, t, move=False,
+                              sub=BUCKET_EMPTY if item.empty else '', category=item.category,
+                              auto=autos[min(j, len(autos) - 1)] if autos else '')
+                    summary['files'] += 1
+                    continue
                 if item.action == 'split':
                     _do_split(item, opts, place, tee, tmp)
                 else:
@@ -544,8 +669,37 @@ def run_job(opts: JobOptions, log, progress, ask_password,
                               auto=autos[j] if j < len(autos) else
                               (autos[0] if autos else ''))
                 summary['files'] += 1
+                if bk and os.path.exists(long_path(item.src)):
+                    # 已导入过 / 去重跳过的:原处那份也收进备份(备份里已有),原文件夹才清爽
+                    os.remove(long_path(item.src))
+                if bk:
+                    n_loose += 1
             except Exception as e:
                 tee(f'  [错误] 归档失败 {item.fname}: {e}')
+
+        # 散放材料:已解压过的压缩包也收进备份,搬空的子文件夹删掉
+        if loose_root or got.pre_extracted:
+            # 系统/临时文件(Thumbs.db 等)也收进备份,免得原文件夹删不空
+            leftovers = got.pre_extracted + [(f, r) for f, r in got.junk if r in bk_dirs]
+            for arc, root in leftovers:
+                bk_root = bk_dirs.setdefault(root, os.path.join(root, BACKUP_PREFIX + stamp))
+                dst = os.path.join(bk_root, os.path.relpath(arc, root))
+                try:
+                    os.makedirs(long_path(os.path.dirname(dst)), exist_ok=True)
+                    shutil.move(long_path(arc), long_path(unique_path(os.path.dirname(dst),
+                                                                      os.path.basename(dst))))
+                except OSError as e:
+                    tee(f'  [提示] 已解压过的压缩包 {os.path.basename(arc)} 未能移入备份: {e}')
+            single = {os.path.dirname(os.path.abspath(f)) for f in opts.inputs if os.path.isfile(f)}
+            for root in set(loose_root.values()):
+                if os.path.isdir(root) and root not in single:
+                    _prune_empty_dirs(root, list(bk_dirs.values()) + [opts.out_dir])
+            summary['backups'] = sorted(bk_dirs.values())
+            if bk_dirs:
+                tee(f'\n散放的原文件 {n_loose} 个已归档,原文件备份在:')
+                for d in summary['backups']:
+                    tee(f'  {d}')
+                tee('  (按原来的文件夹结构保存;确认新分的没问题后,可手动删除备份文件夹。)')
 
         # ---- 6. 汇总 + 反馈核对表 ----
         new = summary['files'] - summary['reimport_skipped']
