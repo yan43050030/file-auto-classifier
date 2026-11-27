@@ -117,18 +117,49 @@ _NOT_FLOW_NAME = re.compile(
     r'持仓|证券|期货|保管箱|印鉴|预留|联系方式|手机号')
 
 
-def is_bank_flow(path, fname=None):
+# 银行名称(全称、分支机构、简称、支付机构),用于判断"文件名里是不是只写了银行名"
+_BANK_FULL = re.compile(
+    r'(中国)?[\u4e00-\u9fa5]{0,12}?(银行|信用社|信用合作联社|农商行|农村商业银行|村镇银行)'
+    r'(股份有限公司|有限责任公司|有限公司)?'
+    r'([\u4e00-\u9fa5]{0,10}?(分行|支行|营业部|分理处|网点|中心))*'
+    r'|[工建农交招]行|中行|浦发|邮储|支付宝|财付通|微信支付|网商|银联|云闪付|京东支付')
+_GENERIC = re.compile(
+    r'查询结果|查询反馈|协查结果|协查|查询|结果|反馈|回复|回执|回函|复函|答复|数据|材料|资料|'
+    r'附件|文件|批次|第[一二三四五六七八九十\d]+批|情况|说明|名单|汇总|导出|新|补充|更新')
+_DOCNO = re.compile(r'[\u4e00-\u9fa5A-Za-z]{0,12}[【〔\[(（]\s*\d{4}\s*[】〕\])）]\s*第?\s*\d+\s*号')
+
+
+def _only_bank_name(stem, unit='', keywords=()):
+    """文件名去掉银行名、人名 / 证号、文号、日期、"查询结果"这类通用词后,还剩不剩说明文字。
+    一般只写「工商银行」「张三_建设银行」的,实际就是交易流水。"""
+    s = re.sub(r'【[^】]*】', ' ', stem)
+    s = _DOCNO.sub(' ', s)
+    for k in sorted((k for k in keywords if k), key=len, reverse=True):
+        s = s.replace(k, ' ')
+    s = _BANK_FULL.sub(' ', s)
+    s = re.sub(r'\d{4}年\d{1,2}月(\d{1,2}日)?', ' ', s)
+    s = _GENERIC.sub(' ', s)
+    s = re.sub(r'[^\u4e00-\u9fa5]', '', s)           # 数字、字母、符号都不算说明
+    # 剩下 ≤3 个汉字多半是没在名单里的人名;再多就是有别的说明(如"余额证明")
+    return len(s) <= 3
+
+
+def is_bank_flow(path, fname=None, unit='', keywords=()):
     """是不是"交易流水"类文件(疑似空值只对这类判定)。
 
-    文件名写明开户信息 / 理财 / 基金 / 保险 / 贷款……的不是(除非同时写着"流水 / 交易明细");
-    文件名写着 流水 / 交易明细 / 对账单 的是;
-    文件名看不出时看表头:有交易日期 + 交易金额 / 借贷这类流水列的是(只有表头、没有数据的也算)。"""
+    1. 文件名写着 流水 / 交易明细 / 对账单 → 是;
+    2. 文件名写明开户信息 / 理财 / 基金 / 保险 / 贷款…… → 不是;
+    3. 文件名只写了银行名(加人名、证号、文号、"查询结果"之类)、没有别的说明 → 是
+       (实际中只写「工商银行」「建设银行」的反馈,大多就是交易流水);
+    4. 都看不出时看表头:有交易日期 + 交易金额 / 借贷这类流水列的是(只有表头的也算)。"""
     fname = fname or os.path.basename(path)
     stem = os.path.splitext(fname)[0]
     if _FLOW_NAME.search(stem):
         return True
     if _NOT_FLOW_NAME.search(stem):
         return False
+    if _only_bank_name(stem, unit, keywords):
+        return True
     low = path.lower()
     try:
         if low.endswith(('.xlsx', '.xlsm', '.xls', '.csv')):

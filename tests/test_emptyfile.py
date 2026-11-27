@@ -143,8 +143,9 @@ def test_empty_only_for_bank_feedback(tmp_path):
             log=lambda m: None, progress=lambda *a: None,
             ask_password=lambda n, a: None)
     empties = sorted(os.listdir(out / '张三' / BUCKET_EMPTY))
-    assert empties == ['【协查反馈】张三_协查结果.xlsx', '【建行】张三_回函.txt']
-    assert '【协查反馈】张三_查询结果.xlsx' in os.listdir(out / '张三' / '银行流水')
+    # 「张三_查询结果.xlsx」除通用词外没别的说明 → 按交易流水对待(只有表头 → 疑似空值)
+    assert empties == ['【协查反馈】张三_协查结果.xlsx', '【协查反馈】张三_查询结果.xlsx',
+                       '【建行】张三_回函.txt']
     others = sorted(os.listdir(out / '张三' / '其他数据'))
     assert others == ['【出入境】张三_出入境记录.txt', '【车管所】张三_机动车登记信息.xlsx',
                       '【车管所】张三_驾驶证信息.xlsx']
@@ -188,3 +189,33 @@ def test_bank_non_flow_files_never_empty(tmp_path):
     t = tmp_path / 'x.txt'; t.write_text('x', encoding='utf-8')
     assert is_bank_flow(str(t), '张三_理财账户交易流水.xlsx')
     assert not is_bank_flow(str(t), '张三_开户信息.xlsx')
+
+
+def test_bank_name_only_files_are_flows(tmp_path):
+    """只写银行名(加人名、证号、文号、"查询结果"之类)、没有别的说明的,按交易流水对待:
+    只有表头 → 疑似空值;开户信息、理财照旧不进疑似空值。"""
+    from fac.emptyfile import BUCKET_EMPTY
+    from fac.doctype import is_bank_flow
+    src = tmp_path / 'in'; src.mkdir()
+    acct_head = xlsx(tmp_path / 'a.xlsx', [['姓名', '证件号码', '开户行', '账号', '余额']])
+    with zipfile.ZipFile(src / '协查反馈.zip', 'w') as z:
+        z.write(acct_head, f'张三_{ID}/工商银行.xlsx')             # 只写银行名,放在此人文件夹里
+        z.write(acct_head, f'张三_{ID}_建设银行查询结果.xlsx')       # 银行名 + 人名证号 + 通用词
+        z.write(acct_head, '张三_农业银行开户信息.xlsx')             # 写明开户信息
+        z.write(acct_head, '张三_交通银行余额证明.xlsx')             # 有别的说明
+    with zipfile.ZipFile(src / '招商银行.zip', 'w') as z:
+        z.write(acct_head, '张三.xlsx')                            # 文件名只有人名,单位是银行
+    out = tmp_path / 'out'
+    run_job(JobOptions([str(src)], str(out), Roster.from_text(f'张三,{ID}'),
+                       intelligent=False, empty_detect=True, unit_mode='category'),
+            log=lambda m: None, progress=lambda *a: None,
+            ask_password=lambda n, a: None)
+    person = out / f'张三_{ID}'
+    assert sorted(os.listdir(person / BUCKET_EMPTY)) == [
+        '【协查反馈】工商银行.xlsx', f'【协查反馈】张三_{ID}_建设银行查询结果.xlsx', '【招商银行】张三.xlsx']
+    assert sorted(os.listdir(person / '银行流水')) == [
+        '【协查反馈】张三_交通银行余额证明.xlsx', '【协查反馈】张三_农业银行开户信息.xlsx']
+    t = tmp_path / 'x.txt'; t.write_text('x', encoding='utf-8')
+    assert is_bank_flow(str(t), '中国工商银行股份有限公司北京朝阳支行_张三.xlsx', keywords=['张三'])
+    assert is_bank_flow(str(t), '【某某查【2026】第1号】张三_农行.xlsx', keywords=['张三'])
+    assert not is_bank_flow(str(t), '张三_建设银行金融理财.xlsx', keywords=['张三'])

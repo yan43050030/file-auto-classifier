@@ -288,3 +288,19 @@ def test_txt_files_always_classified_and_pw_file_excluded(tmp_path):
 
 def test_auto_pw_txt_default_off():
     assert JobOptions([], '.', Roster([])).auto_pw_txt is False
+
+
+def test_file_without_name_uses_folder_or_archive_name(tmp_path):
+    """只写「工商银行.xlsx」的文件:看所在文件夹 / 压缩包名找人;名字有多个人时不猜。"""
+    src = tmp_path / 'in'; src.mkdir()
+    with zipfile.ZipFile(src / '张三.zip', 'w') as z:          # 压缩包按人命名
+        z.writestr('工商银行.xlsx', 'a')
+    with zipfile.ZipFile(src / '第二批反馈.zip', 'w') as z:
+        z.writestr('李四/建设银行.xlsx', 'b')                   # 包里按人分文件夹
+        z.writestr('张三和李四/农业银行.xlsx', 'c')             # 两个人 → 不猜
+    out = tmp_path / 'out'
+    run(JobOptions([str(src)], str(out), Roster.from_text(ROSTER), intelligent=False,
+                   unit_mode='category'))
+    assert list((out / f'张三_{ID_A}').rglob('*工商银行.xlsx'))
+    assert list((out / f'李四_{ID_B}').rglob('*建设银行.xlsx'))
+    assert list((out / '未分类').rglob('*农业银行.xlsx'))

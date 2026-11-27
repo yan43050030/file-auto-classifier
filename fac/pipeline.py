@@ -331,15 +331,22 @@ def run_job(opts: JobOptions, log, progress, ask_password,
         # ---- 3. 匹配人员,生成归档计划 ----
         tee('解压完成,开始匹配人员...')
         all_files = []
+        # 文件所在的上下文:压缩包里的文件夹路径(含内层压缩包名)+ 压缩包名。
+        # 只写「工商银行.xlsx」的文件,常常放在「张三/」文件夹或「张三.zip」里
+        ctx_of = {}
         for sub, unit in extracted:
             for root, _, files in os.walk(sub):
+                rel_dir = os.path.relpath(root, sub)
                 for f in files:
                     if ex.is_archive(f):
                         continue   # 只分类最终解压出的文件
-                    all_files.append((os.path.join(root, f), f, unit))
+                    fp = os.path.join(root, f)
+                    all_files.append((fp, f, unit))
+                    ctx_of[fp] = ' '.join(x for x in (rel_dir if rel_dir != '.' else '', unit) if x)
         # 非压缩包的直接文件也加入分类
         for fp, unit in loose_files:
             all_files.append((fp, os.path.basename(fp), unit))
+            ctx_of[fp] = ' '.join(x for x in (os.path.basename(os.path.dirname(fp)), unit) if x)
 
         # 内容匹配对"名单 + 智能识别 + 证号兜底"都有用,不再要求名单非空
         use_content = opts.content_match
@@ -399,6 +406,11 @@ def run_job(opts: JobOptions, log, progress, ask_password,
 
             persons = opts.roster.match(fname)
             via = '文件名'
+            if not persons and len(opts.roster) > 0 and ctx_of.get(fp):
+                # 文件名里没人名(如只写「工商银行」):看所在文件夹 / 压缩包名,只认唯一的一个人
+                cp = opts.roster.match(ctx_of[fp])
+                if len(cp) == 1:
+                    persons, via = cp, '所在文件夹/压缩包名'
             if not persons and use_content and len(opts.roster) > 0:
                 text = get_text()
                 if text:
@@ -625,14 +637,14 @@ def _mark_empty(plan, opts: JobOptions, tee):
             continue
         if is_pboc(item.fname, item.unit):
             continue          # 人民银行账户信息:汇总性质,一律当作有效数据
-        if not is_bank_flow(item.src, item.fname):
-            continue          # 开户信息、理财、基金……不是交易流水,本来就小,不判空值
         # 被查询对象的姓名/证号:表格里只出现这些不算"有内容"
         kws = []
         for p in item.persons or []:
             kws.extend(p.keywords())
         for t in item.targets:
             kws.extend(x for x in re.split(r'[_\\/]', t) if len(x) >= 2)
+        if not is_bank_flow(item.src, item.fname, item.unit, kws):
+            continue          # 开户信息、理财、基金……不是交易流水,本来就小,不判空值
         reason = empty_reason(item.src, size, max_bytes, kws)
         if reason:
             item.empty = reason
